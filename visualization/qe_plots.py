@@ -14,7 +14,7 @@ ESCALA_IQE = [
 ]
 
 
-def curvas_eficiencia(lambda_nm, eqe, iqe, cota, lambda_marcada=None):
+def curvas_eficiencia(lambda_nm, eqe, iqe, cota, lambda_marcada=None, iqe_abs=None):
     """
     Las dos eficiencias cuánticas contra el color, con su cota física.
 
@@ -29,8 +29,15 @@ def curvas_eficiencia(lambda_nm, eqe, iqe, cota, lambda_marcada=None):
         line=dict(color=COLOR_COTA, width=1.6, dash="dot"),
         hovertemplate="λ = %{x:.0f} nm<br>tope %{y:.1f} %<extra></extra>",
     ))
+    if iqe_abs is not None:
+        fig.add_trace(go.Scatter(
+            x=lambda_nm, y=100 * iqe_abs, mode="lines",
+            name="Por fotón absorbido",
+            line=dict(color="#7A5BD0", width=2.0, dash="dash"),
+            hovertemplate="λ = %{x:.0f} nm<br>por absorbido %{y:.1f} %<extra></extra>",
+        ))
     fig.add_trace(go.Scatter(
-        x=lambda_nm, y=100 * iqe, mode="lines", name="Interna (IQE)",
+        x=lambda_nm, y=100 * iqe, mode="lines", name="Interna, EQE/(1−R)",
         line=dict(color=COLOR_IQE, width=2.4),
         hovertemplate="λ = %{x:.0f} nm<br>IQE %{y:.1f} %<extra></extra>",
     ))

@@ -7,7 +7,6 @@ import streamlit as st
 import config
 import constants as C
 from physics.collection import transporte as armar_transporte
-from physics.diode import corriente_saturacion
 from physics.material import juntura as resolver_juntura
 from physics.optics import campo_optico
 from physics.quantum_efficiency import generar_sectores
@@ -30,21 +29,25 @@ def _base_fisica(d_n_um, W_p_um, na, nd, t_c, reflector, irradiancia,
     t_k = celsius_a_kelvin(t_c)
     union = resolver_juntura(d_n, na, nd, t_k)
     campo = campo_optico(d_n, W_p, reflector, irradiancia,
-                         np.linspace(union.x_n, union.x_p, NODOS_EN_DEPLEXION))
+                         np.linspace(max(union.x_n, 0.0), union.x_p, NODOS_EN_DEPLEXION))
     tr = armar_transporte(mu_p, tau_p_us * 1e-6, mu_n, tau_n_us * 1e-6, s_f, s_r, t_k)
-    j0, _, _ = corriente_saturacion(na, nd, tr, t_k)
-    return campo, union, tr, j0, t_k, d_n + W_p
+    return campo, union, tr, t_k, d_n + W_p
 
 
 @st.cache_data(show_spinner=False, max_entries=16)
-def _resolver(_campo, _union, W, _tr, j0, t_k, tau_n_us, s_f, dispersion,
+def _resolver(_campo, _union, W, _tr, huella, t_k, na, nd, tau_n_us, s_f, dispersion,
               defectos, n_dedos, ancho_dedo_um, rs_base, rp, n_idealidad,
-              irradiancia, v_max):
+              irradiancia):
+    """
+    `huella` reune los parametros fisicos que solo entran por objetos con guion
+    bajo. Streamlit excluye esos del hash de cache, asi que sin ella un cambio de
+    tau_p, S_r, temperatura o reflector devolveria un resultado viejo (ver D-22).
+    """
     sectores = generar_sectores(config.N_SECTORES, tau_n_us * 1e-6, s_f, dispersion)
     celda = armar_celda(_campo, _union, W, _tr, sectores, defectos,
-                        n_dedos, ancho_dedo_um * 1e-4, rs_base)
-    v, j = curva_global(celda, j0, rp, n_idealidad, t_k, v_max)
-    p = parametros_de_curva(v, j, C.IRRADIANCE_1SUN * irradiancia)
+                        n_dedos, ancho_dedo_um * 1e-4, rs_base, na, nd, t_k)
+    v, j, v_oc = curva_global(celda, rp, n_idealidad, t_k)
+    p = parametros_de_curva(v, j, C.IRRADIANCE_1SUN * irradiancia, v_oc)
     return celda, v, j, p
 
 
@@ -101,7 +104,7 @@ def render():
         "localizados y se observa su efecto tanto en el mapa como en la curva global."
     )
 
-    campo, union, tr, j0, t_k, W = _base_fisica(
+    campo, union, tr, t_k, W = _base_fisica(
         s.d_n_um, s.W_p_um, s.NA, s.ND, s.T_c, s.reflector_trasero,
         s.irradiancia_soles, s.mu_p, s.tau_p_us, s.mu_n, s.tau_n_us, s.S_f, s.S_r)
 
@@ -112,15 +115,16 @@ def render():
 
     defectos = _controles_defectos()
 
-    v_max = 0.62 if s.T_c <= 50 else 0.58
+    huella = (s.T_c, s.reflector_trasero, s.irradiancia_soles, s.mu_p, s.tau_p_us,
+              s.mu_n, s.S_r, s.d_n_um, s.W_p_um)
     celda_sana, v0, j0_curva, p_sana = _resolver(
-        campo, union, W, tr, j0, t_k, s.tau_n_us, s.S_f, dispersion,
+        campo, union, W, tr, huella, t_k, s.NA, s.ND, s.tau_n_us, s.S_f, dispersion,
         Defectos(), s.n_dedos, s.ancho_dedo_um, s.R_s, s.R_p, s.n_idealidad,
-        s.irradiancia_soles, v_max)
+        s.irradiancia_soles)
     celda, v, j, p = _resolver(
-        campo, union, W, tr, j0, t_k, s.tau_n_us, s.S_f, dispersion,
+        campo, union, W, tr, huella, t_k, s.NA, s.ND, s.tau_n_us, s.S_f, dispersion,
         defectos, s.n_dedos, s.ancho_dedo_um, s.R_s, s.R_p, s.n_idealidad,
-        s.irradiancia_soles, v_max)
+        s.irradiancia_soles)
 
     st.divider()
 
@@ -150,14 +154,16 @@ def render():
     m1, m2 = st.columns(2, gap="large")
     with m1:
         st.plotly_chart(
-            defect_plots.mapa_electroluminiscencia(
+            defect_plots.mapa_fotocorriente_local(
                 celda.j_l, celda.con_contaminacion, celda.con_dedo_roto,
                 referencia=celda_sana.j_l),
             use_container_width=True)
         st.caption(
-            "La contaminación se ve: esos sectores emiten menos porque colectan menos. "
-            "Los sectores sin dedo, en cambio, **brillan igual que los sanos** — generan "
-            "y colectan exactamente lo mismo, su problema es sacar la corriente."
+            "Este mapa dibuja **fotocorriente local**, no electroluminiscencia. La "
+            "contaminación se ve porque colecta menos. Los sectores sin dedo no se ven "
+            "aquí, pero eso es una consecuencia de lo que el mapa grafica, **no una "
+            "predicción de lo que vería un instrumento**: la electroluminiscencia real "
+            "sí detecta defectos de resistencia serie, y es una técnica estándar para eso."
         )
     with m2:
         st.plotly_chart(defect_plots.mapa_resistencia(celda.r_s),
@@ -202,9 +208,9 @@ def render():
     # Cada defecto por separado, para poder atribuir el daño sin ambiguedad.
     def _solo(defecto_aislado):
         _, _, _, pp = _resolver(
-            campo, union, W, tr, j0, t_k, s.tau_n_us, s.S_f, dispersion,
-            defecto_aislado, s.n_dedos, s.ancho_dedo_um, s.R_s, s.R_p,
-            s.n_idealidad, s.irradiancia_soles, v_max)
+            campo, union, W, tr, huella, t_k, s.NA, s.ND, s.tau_n_us, s.S_f,
+            dispersion, defecto_aislado, s.n_dedos, s.ancho_dedo_um, s.R_s,
+            s.R_p, s.n_idealidad, s.irradiancia_soles)
         return pp
 
     p_col = _solo(Defectos(
@@ -259,9 +265,11 @@ def render():
     )
 
     st.caption(
-        "Límite declarado del modelo (D-10): no se modela el acoplamiento lateral entre "
-        "sectores vecinos. En una celda real, un sector muy dañado puede ser empujado a "
-        "polarización inversa por sus vecinos, que es el origen de los puntos calientes "
-        "que revela la termografía. Modelarlo exigiría resolver una red eléctrica "
-        "bidimensional completa, fuera del alcance del enunciado."
+        "Límites declarados. **No se modela el acoplamiento lateral** entre sectores "
+        "vecinos, ni ningún balance térmico: este modelo no calcula temperatura, así que "
+        "no predice puntos calientes. Sí reproduce que un sector de poca fotocorriente "
+        "**consuma** corriente cuando el conjunto opera por encima de su circuito abierto "
+        "local, que es disipación en directa y no requiere polarización inversa. El caso "
+        "de inversión por sombreado es propio de celdas en **serie**, un problema distinto "
+        "que este modelo tampoco resuelve."
     )

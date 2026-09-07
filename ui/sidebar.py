@@ -14,6 +14,8 @@ import numpy as np
 import streamlit as st
 
 import config
+from physics.material import bandgap
+from units import celsius_a_kelvin
 
 
 def _opciones_log(vmin, vmax, incluir=()):
@@ -159,7 +161,9 @@ def render():
             st.slider(
                 "Resistencia paralelo, R_p [Ω·cm²]",
                 *config.RANGOS["R_p"], key="R_p", step=10.0,
-                help="Caminos de fuga. No afecta apreciablemente a la corriente de cortocircuito.",
+                help="Caminos de fuga. Afecta sobre todo al voltaje y al factor de forma; "
+                     "a la corriente de cortocircuito casi no, salvo con valores muy bajos "
+                     "(con 10 Ω·cm² la baja un 9 %).",
             )
             st.slider(
                 "Factor de idealidad del diodo, n",
@@ -190,10 +194,10 @@ def render():
                 "Movilidad de huecos en el emisor, µ_p [cm²/V·s]",
                 *config.RANGOS["mu_p"], key="mu_p", step=5.0,
             )
-            st.slider(
-                "Banda prohibida a 300 K, E_g [eV]",
-                *config.RANGOS["Eg"], key="Eg", step=0.01,
-                help="1,12 eV es el valor canónico del silicio (Anexo B).",
+            st.caption(
+                f"Banda prohibida **{bandgap(celsius_a_kelvin(st.session_state.T_c)):.4f} eV** "
+                f"a la temperatura actual. No es un control: cambiarla exigiría datos "
+                f"ópticos de otro material, y los de Green son de silicio."
             )
 
         st.divider()

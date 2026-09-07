@@ -73,7 +73,7 @@ def _razon_hiperbolica(a, b, k):
     return numerador / denominador
 
 
-def probabilidad_coleccion(x_cm, union, W_cm, tr: Transporte):
+def probabilidad_coleccion(x_cm, union, W_cm, tr: Transporte, recortar=True):
     """
     Probabilidad de colección en cada punto de la grilla de profundidad.
 
@@ -97,7 +97,11 @@ def probabilidad_coleccion(x_cm, union, W_cm, tr: Transporte):
             (ancho_base - u) / tr.L_n, ancho_base / tr.L_n,
             tr.peso_superficie_trasera)
 
-    return np.clip(fc, 0.0, 1.0)
+    # El recorte es una red de seguridad, no parte del modelo: las expresiones
+    # deben entregar ya un valor en [0,1]. Poder pedir el valor SIN recortar es lo
+    # que permite que la verificacion C-T1 compruebe algo de verdad; comprobar el
+    # resultado ya recortado no puede fallar nunca (ver D-26).
+    return np.clip(fc, 0.0, 1.0) if recortar else fc
 
 
 def reparto_generacion(G, fc):

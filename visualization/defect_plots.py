@@ -19,15 +19,19 @@ COLOR_SANA = "#8894A8"
 COLOR_DANADA = "#E5A33F"
 
 
-def mapa_electroluminiscencia(j_l, contaminacion, dedo_roto, referencia=None):
+def mapa_fotocorriente_local(j_l, contaminacion, dedo_roto, referencia=None):
     """
-    Mapa de emisión por sectores, al estilo de una imagen de electroluminiscencia.
+    Mapa de fotocorriente local por sector, con escala visual tipo infrarrojo.
 
-    En una celda real, si se le hace pasar corriente hacia atrás emite un brillo
-    infrarrojo que es más intenso donde el material es bueno y se apaga donde hay
-    defectos. Así detectan los técnicos grietas y contaminación en paneles sin
-    destruirlos. Aquí la intensidad es la fotocorriente local, que es la magnitud
-    que el defecto de colección degrada.
+    **No es una imagen de electroluminiscencia.** La electroluminiscencia se mide
+    inyectando corriente en directa y observando la recombinación radiativa, y
+    detecta perfectamente los defectos de resistencia serie: es una técnica
+    estándar para eso. Este mapa dibuja otra cosa, la fotocorriente local, que por
+    construcción no cambia cuando el defecto es resistivo.
+
+    Se conserva porque muestra bien el daño de colección, pero llamarlo
+    electroluminiscencia era incorrecto y llevaba a una conclusión falsa sobre lo
+    que un instrumento real vería (ver D-25).
     """
     n = j_l.shape[0]
     escala = referencia if referencia is not None else j_l
@@ -54,7 +58,7 @@ def mapa_electroluminiscencia(j_l, contaminacion, dedo_roto, referencia=None):
     fig.update_yaxes(title="sector", dtick=1, showgrid=False, zeroline=False,
                      scaleanchor="x", scaleratio=1)
     fig.update_layout(title=_titulo(
-        "Mapa de emisión de la celda",
+        "Fotocorriente local por sector",
         "azul: contaminación metálica  ·  rojo punteado: dedos interrumpidos"))
     return _base(fig, alto=440, margen_superior=62)
 

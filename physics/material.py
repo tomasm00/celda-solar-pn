@@ -113,23 +113,60 @@ class Juntura:
     x_p: float          # borde de la zona en el lado p
     psi0: float         # potencial de contacto, en volt
     ni: float           # concentración intrínseca a esta temperatura, 1/cm3
+    reparto: str = "simetrico"
+    aviso: str = ""     # no vacio si la geometria pedida no era representable
 
 
-def juntura(d_n_cm, na, nd, t_k):
+def _reparto_simetrico(d_n_cm, w):
+    return d_n_cm - w / 2.0, d_n_cm + w / 2.0
+
+
+def _reparto_por_neutralidad(d_n_cm, w, na, nd):
+    """
+    Reparto que respeta la neutralidad de carga: N_D·w_n = N_A·w_p.
+
+    La zona se extiende hacia cada lado en razón inversa a su dopaje, porque hace
+    falta menos espesor para acumular la misma carga donde hay más dopantes.
+    """
+    w_n = w * na / (na + nd)
+    w_p = w * nd / (na + nd)
+    return d_n_cm - w_n, d_n_cm + w_p
+
+
+def juntura(d_n_cm, na, nd, t_k, reparto="simetrico"):
     """
     Resuelve la geometría de la juntura.
 
     DECISION D-02: el enunciado reparte la zona de deplexión simétricamente a
-    ambos lados de la juntura. Físicamente se extendería casi enteramente hacia
-    el lado menos dopado, pero ambas cifras son despreciables frente al emisor,
-    así que se sigue el enunciado y se declara la simplificación.
+    ambos lados. Físicamente el reparto correcto es el que respeta la neutralidad
+    de carga, que la manda casi entera al lado menos dopado. Se ofrecen ambos y
+    el enunciado es el que manda por defecto.
+
+    Con el reparto simétrico hay combinaciones de dopaje y espesor de emisor en
+    las que el borde del lado n **cae fuera de la celda**: la zona de deplexión
+    llega a medir más que el emisor. Eso no es una celda; es una geometría que el
+    modelo no puede representar. Antes se aceptaba en silencio y la colección
+    salía valiendo 1 en la superficie frontal, ocultando por completo el efecto de
+    la recombinación superficial. Ahora se detecta y se cae al reparto por
+    neutralidad, avisando (ver D-21).
     """
     w = float(ancho_deplexion(na, nd, t_k))
-    return Juntura(
-        x_j=d_n_cm,
-        W_dep=w,
-        x_n=d_n_cm - w / 2.0,
-        x_p=d_n_cm + w / 2.0,
-        psi0=float(potencial_contacto(na, nd, t_k)),
-        ni=float(concentracion_intrinseca(t_k)),
+    psi0 = float(potencial_contacto(na, nd, t_k))
+    ni = float(concentracion_intrinseca(t_k))
+
+    if reparto == "neutralidad":
+        x_n, x_p = _reparto_por_neutralidad(d_n_cm, w, na, nd)
+        return Juntura(d_n_cm, w, x_n, x_p, psi0, ni, "neutralidad")
+
+    x_n, x_p = _reparto_simetrico(d_n_cm, w)
+    if x_n > 0.0:
+        return Juntura(d_n_cm, w, x_n, x_p, psi0, ni, "simetrico")
+
+    x_n, x_p = _reparto_por_neutralidad(d_n_cm, w, na, nd)
+    aviso = (
+        f"Con este dopaje la zona de deplexión mide {w * 1e4:.3f} µm, más que el "
+        f"emisor de {d_n_cm * 1e4:.3f} µm, así que el reparto simétrico del "
+        f"enunciado dejaría su borde fuera de la celda. Se usa el reparto por "
+        f"neutralidad de carga, que es el físicamente correcto."
     )
+    return Juntura(d_n_cm, w, max(x_n, 0.0), x_p, psi0, ni, "neutralidad", aviso)

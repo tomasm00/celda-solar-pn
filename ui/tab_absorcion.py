@@ -123,6 +123,7 @@ def render():
                       "R": campo.R, "Nph": campo.Nph},
             exagerar_deplexion=exagerar,
             coleccion=(cm_a_um(campo.x_cm), fc) if marcar_destino else None,
+            reflector=s.reflector_trasero,
         )
         st.plotly_chart(fig3d, use_container_width=True)
 
@@ -163,15 +164,19 @@ def render():
 
         if not es_espectro:
             st.markdown(f"#### El color de {lam:.0f} nm")
-            reparto = cell3d.resumen_sorteo(alpha, refl, um_a_cm(W_um), um_a_cm(s.d_n_um))
+            reparto = cell3d.resumen_sorteo(alpha, refl, um_a_cm(W_um),
+                                            um_a_cm(s.d_n_um), s.reflector_trasero)
             st.dataframe(
                 {
                     "Destino del fotón": ["Rebota en la superficie",
                                           "Se absorbe en el emisor",
-                                          "Se absorbe en la base", "Atraviesa la celda"],
+                                          "Se absorbe en la base",
+                                          "Lo absorbe el aluminio",
+                                          "Escapa de la celda"],
                     "Fracción": [f"{100 * reparto['reflejados']:.1f} %",
                                  f"{100 * reparto['en_emisor']:.1f} %",
                                  f"{100 * reparto['en_base']:.1f} %",
+                                 f"{100 * reparto['absorbido_en_aluminio']:.1f} %",
                                  f"{100 * reparto['atraviesan']:.1f} %"],
                 },
                 hide_index=True, use_container_width=True,
@@ -254,9 +259,7 @@ def render():
             "la celda sin absorberse."
         )
 
-    st.info(
-        "La eficiencia cuántica, que combina esta colección con el espectro para dar la "
-        "respuesta de la celda color por color, es el Hito 4. También la grilla de 8×8 "
-        "sectores con su tiempo de vida local.",
-        icon="🔧",
+    st.caption(
+        "La eficiencia cuántica, que combina esta colección con el espectro para dar "
+        "la respuesta de la celda color por color, está en la Pestaña 2."
     )

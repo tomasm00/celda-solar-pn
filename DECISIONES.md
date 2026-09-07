@@ -242,3 +242,129 @@ Lista para la sección de límites del reporte y de la presentación.
 ## Pendientes
 
 - Modelo de resistencia serie de la malla frontal de plata: no aparece en las Unidades 2 ni 3. Se usará el modelo estándar de ingeniería fotovoltaica, declarado como **[EXTERNO]** con su fuente en el módulo de constantes.
+
+---
+
+# Correcciones tras auditoría externa · 7 de septiembre de 2026
+
+Una auditoría independiente revisó el commit `38ade8f` y encontró errores reproducibles. **Se verificó cada afirmación contra el código antes de actuar; todas las comprobadas resultaron correctas**, con cifras que coinciden con las nuestras hasta la cuarta cifra significativa.
+
+## D-18 · El solver por sectores no permitía corriente negativa — [BUG CORREGIDO]
+
+**Qué pasaba.** `_corriente_vectorizada` buscaba el voltaje de juntura en un intervalo que arrancaba en el voltaje de terminal, de modo que la corriente resultante nunca podía ser negativa. Un sector con poca fotocorriente tiene un circuito abierto local más bajo que el del conjunto, y por encima de él **consume** corriente: su diodo conduce en directa alimentado por los sectores sanos. Eso no requiere polarización inversa ni acoplamiento lateral, solo estar en paralelo.
+
+**Además**, la Pestaña 4 fijaba el voltaje máximo del barrido en 0,62 V y, si la curva no cruzaba cero, `parametros_de_curva` devolvía el último punto como circuito abierto.
+
+**Evidencia.** A 0,600 V el solver daba +0,0000 donde el escalar da −5,1003 mA/cm². A −15 °C reportaba Voc = 0,620000 V y FF = 0,936280, cuando lo real es 0,718812 y 0,810169.
+
+**Corrección.** El intervalo se expande hacia ambos lados hasta encerrar la raíz con cambio de signo. El circuito abierto se busca resolviendo la raíz de la corriente total, no recorriendo un rango fijo.
+
+**Resultado.** Las Pestañas 3 y 4 coinciden ahora a **0,0000 mV** a −15, 45 y 75 °C. Se añadió la verificación **C-T6** para que no vuelvan a divergir sin avisar.
+
+---
+
+## D-19 · La contaminación no actualizaba la corriente de saturación — [INCONSISTENCIA CORREGIDA]
+
+**Qué pasaba.** El defecto de contaminación bajaba el tiempo de vida local, acortaba la longitud de difusión y reducía la fotocorriente, pero los sectores conservaban la corriente de saturación de la celda nominal. Eso contradice la propia expresión del modelo: J₀ de la base va como el inverso de la longitud de difusión, así que **reducir el tiempo de vida también aumenta la recombinación en oscuridad**.
+
+**Magnitud.** Dividir el tiempo de vida por mil multiplica J₀ local por **31,6**. Verificado: 32,34 con el término de emisor incluido.
+
+**Corrección.** `armar_celda` calcula J₀ por sector con el mismo tiempo de vida, geometría y condiciones de borde que usa la colección.
+
+**Consecuencia sobre nuestras conclusiones publicadas.** La asimetría entre defectos cambia de forma material:
+
+| Contaminación, 14,06 % del área | Antes | Después |
+|---|---|---|
+| Caída de Jsc | 4,96 % | 4,96 % |
+| Caída de Voc | 0,00 % | **3,92 %** |
+| Caída del factor de forma | 0,35 % | **4,39 %** |
+| Caída de eficiencia | 5,29 % | **12,69 %** |
+
+La asimetría en **corriente** sobrevive intacta, 16 a 1. La de **factor de forma** cae de 26:1 a 2,1:1: era en buena parte un artefacto del error. Aparece en cambio una asimetría más limpia que la anterior: los dedos rotos dejan el voltaje **exactamente** intacto (−0,00 %) mientras la contaminación lo baja un 3,92 %.
+
+---
+
+## D-20 · J₀ y colección usaban condiciones de borde distintas — [INCONSISTENCIA CORREGIDA]
+
+**Qué pasaba.** La corriente de saturación usaba la forma de «base larga», que supone regiones mucho más largas que la longitud de difusión. Ese supuesto **no se cumple aquí**: la longitud en la base es de 314 µm sobre una base de 100 µm. Mientras tanto la colección sí usaba la forma finita con recombinación superficial. Son la misma ecuación con las mismas condiciones de borde; usar dos formas distintas es incoherente.
+
+**Corrección.** Se añadió el factor de región finita
+
+    F = [tanh(w/L) + S·L/D] / [1 + (S·L/D)·tanh(w/L)]
+
+cuyos tres límites son los esperados: F → 1 para región mucho más larga que L, F → tanh(w/L) con superficie perfectamente pasivada, F → coth(w/L) con superficie infinitamente ávida.
+
+**Magnitud, verificada contra la auditoría:**
+
+| S trasera | F | Voc antes | Voc después |
+|---|---|---|---|
+| 10 cm/s | 0,318 | 0,587233 V | 0,618581 V (**+31,35 mV**) |
+| 10³ cm/s | 0,977 | 0,586464 V | 0,587100 V (+0,64 mV) |
+| 10⁶ cm/s | 3,239 | 0,583651 V | 0,551500 V (**−32,15 mV**) |
+
+Con los valores de la semilla el efecto es pequeño porque el cociente S·L/D está cerca de uno, **no porque la base sea larga**. En otros regímenes llega a ±32 mV.
+
+---
+
+## D-21 · Geometría inválida aceptada en silencio — [BUG CORREGIDO]
+
+**Qué pasaba.** Con dopajes bajos, la zona de deplexión llega a medir más que el emisor, y el reparto simétrico del enunciado dejaba su borde **fuera de la celda**. Con dₙ = 0,2 µm y N_A = 10¹⁴ cm⁻³ resultaba x_n = −1,40013 µm. El código no lo detectaba: la rama del emisor se saltaba y la colección quedaba valiendo **1,000000 en la superficie frontal**, ocultando por completo el efecto de la recombinación superficial.
+
+**Corrección.** Se detecta y se cae al reparto por neutralidad de carga, `N_D·w_n = N_A·w_p`, que es el físicamente correcto, avisando en pantalla. La colección en la superficie pasa de 1,000000 a 0,804316.
+
+---
+
+## D-22 · Las claves de caché excluían parámetros físicos — [BUG CORREGIDO]
+
+**Qué pasaba.** Streamlit excluye del hash de caché los argumentos que empiezan con guion bajo. Como pasábamos el campo óptico, la juntura y el transporte con ese prefijo, cambios en el tiempo de vida del emisor, la recombinación trasera, la temperatura o el reflector **no invalidaban la entrada**, y la aplicación podía devolver un resultado viejo mientras otra parte de la pantalla ya se había actualizado.
+
+**Corrección.** Se añadió una huella explícita con todos los parámetros físicos que solo entraban por esos objetos.
+
+---
+
+## D-23 · El reflector no llegaba a la animación ni a la tabla — [BUG CORREGIDO]
+
+Las cifras de la Pestaña 1 incluían el segundo paso de la luz, pero la animación tridimensional y la tabla de destinos del color seguían mostrando un solo paso: las dos vistas se contradecían. Ahora ambas reciben el estado del reflector, y la tabla separa lo que absorbe el aluminio de lo que escapa por el frente, en vez de agruparlo todo bajo «transmitido».
+
+---
+
+## D-24 · La interpretación de la eficiencia cuántica estaba al revés — [TEXTO CORREGIDO]
+
+La interfaz atribuía a reflexión la distancia entre la curva externa y la cota `1−R`. **Esa reflexión ya está descontada en la cota**: esa distancia es la suma de la luz que atraviesa sin absorberse más los pares que se recombinan.
+
+Se mantiene la definición del enunciado, `IQE = EQE/(1−R)`, y se añade junto a ella la eficiencia por fotón **absorbido**, que sí aísla la calidad de colección. A 1000 nm la diferencia entre ambas es de 43,7 puntos porcentuales, y esa diferencia es absorción incompleta, no recombinación.
+
+---
+
+## D-25 · El mapa no calculaba electroluminiscencia — [TEXTO CORREGIDO]
+
+Llamábamos «mapa de emisión» a lo que dibuja fotocorriente local. De ahí salía una conclusión falsa: que un sector sin dedo «brilla igual», presentado como resultado físico cuando era una consecuencia de lo que el mapa grafica. **La electroluminiscencia real sí detecta defectos de resistencia serie** — es una técnica estándar precisamente para eso. Renombrado a «Fotocorriente local por sector», con la aclaración en pantalla.
+
+---
+
+## D-26 · La verificación C-T1 era vacía — [VALIDACIÓN CORREGIDA]
+
+Comprobaba que la probabilidad de colección estuviera en [0,1] **después** de recortarla con `np.clip`. No podía fallar nunca. Ahora se evalúa antes del recorte, que pasa a ser red de seguridad y no parte del modelo.
+
+---
+
+## D-27 · V4 no detectaba la trampa que decía detectar — [VALIDACIÓN AMPLIADA]
+
+El enunciado define V4 con resistencia serie nula, y **sin resistencia serie el término Rs·J desaparece**: las dos formas de la ecuación coinciden exactamente. Verificado: difieren en 8×10⁻⁷. Un solver que ignorara el término aprobaría V4 igual.
+
+Se mantiene V4 como la exige el enunciado y se añade **C-T5**, que evalúa con resistencia serie real y exige que el factor de forma correcto quede por debajo del que da el atajo. Con nuestra resistencia, el atajo sobrestima un 2,6 %.
+
+---
+
+## Lo que la auditoría señaló y decidimos no cambiar
+
+- **Definición de IQE.** El enunciado y la Unidad 3 la definen como `EQE/(1−R)`. Se mantiene, y se añade la otra al lado en lugar de sustituirla.
+- **Reparto simétrico de la deplexión.** Sigue siendo el del enunciado por defecto, ahora con el reparto por neutralidad disponible y activado automáticamente cuando el simétrico produciría una geometría imposible.
+- **Resistencia de capa del emisor fija.** La auditoría señala que 60 Ω/cuadro implicaría una movilidad de mayoritarios de 3,47 cm²/V·s, inconsistente con nuestro dopaje uniforme. Es correcto, y queda declarado como limitación: el valor corresponde a un perfil difundido real, no al emisor uniforme del modelo óptico.
+- **Emisor degenerado.** La auditoría objeta que acotar el error con la razón 1225:1 es circular, porque esa razón sale del mismo modelo inválido. Es una crítica justa al *argumento*. La conclusión se mantiene pero se enuncia con más cuidado: incluso si el estrechamiento de banda multiplicara por cincuenta el término del emisor, seguiría siendo veinticinco veces menor que el de la base.
+
+## Estado tras las correcciones
+
+**18 verificaciones, 0 fallas reales.** Las siete del enunciado aprueban.
+
+Valores actualizados de la celda de la semilla: Jsc **14,5526 mA/cm²**, Voc **0,587100 V**, factor de forma **0,769274**, eficiencia **6,5726 %**, coeficiente térmico **−2,209 mV/°C**.

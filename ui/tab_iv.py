@@ -35,7 +35,8 @@ def _fotocorriente(d_n_um, W_p_um, na, nd, t_c, reflector, irradiancia,
     fc = probabilidad_coleccion(campo.x_cm, union, d_n + W_p, tr)
     eqe, _ = eficiencia_cuantica(campo, fc)
     j_l = corriente_de_cortocircuito(campo, eqe)
-    j0, termino_base, termino_emisor = corriente_saturacion(na, nd, tr, t_k)
+    j0, termino_base, termino_emisor = corriente_saturacion(
+        na, nd, tr, t_k, union=union, W_cm=d_n + W_p)
     return j_l, j0, termino_base, termino_emisor, tr, t_k
 
 
@@ -111,7 +112,9 @@ def render():
         st.error(
             f"**Régimen no físico.** El voltaje de circuito abierto ({curva.v_oc:.4f} V) "
             f"supera la banda prohibida del silicio a esta temperatura ({eg_v:.4f} eV). "
-            f"Ninguna celda puede hacer eso: la energía de cada par es a lo sumo E_g. "
+            f"El voltaje extraíble está limitado por la separación de los cuasi-niveles "
+            f"de Fermi, y los portadores termalizan a los bordes de banda en picosegundos, "
+            f"así que esa separación no puede superar E_g en un dispositivo convencional. "
             f"Ocurre porque el modelo trata el factor de idealidad y la corriente de "
             f"saturación como independientes, y no lo son — un factor de idealidad alto "
             f"nace de la recombinación en la zona de deplexión, que trae consigo una "
@@ -208,9 +211,6 @@ def render():
         "óptimo, marcado con la línea naranja."
     )
 
-    st.info(
-        "Los defectos localizados y su propagación a esta curva son el Hito 6: una región "
-        "de bajo tiempo de vida y un dedo de plata interrumpido, para ver que dañan la "
-        "celda de maneras físicamente distintas.",
-        icon="🔧",
+    st.caption(
+        "Los defectos localizados y su propagación a esta curva están en la Pestaña 4."
     )

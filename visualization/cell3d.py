@@ -24,6 +24,8 @@ segundo llegando a la misma superficie.
 import numpy as np
 import plotly.graph_objects as go
 
+import constants as C
+
 from units import cm_a_um
 from visualization.colors import hex_de_longitud_onda
 
@@ -70,18 +72,33 @@ def _muestrear_longitudes(lam, nph, n, rng):
     return np.clip(indices, 0, len(lam) - 1)
 
 
-def _sortear_fotones(n, alpha, reflectancia, W_cm, rng):
-    """Destino de cada fotón: rebota, muere a cierta profundidad, o atraviesa."""
+def _sortear_fotones(n, alpha, reflectancia, W_cm, rng, reflector=False):
+    """
+    Destino de cada fotón: rebota, muere a cierta profundidad, o atraviesa.
+
+    Con reflector trasero, el fotón que llega al fondo sin absorberse tiene una
+    segunda oportunidad: el aluminio lo devuelve con probabilidad R_Al y vuelve a
+    recorrer la celda. Un fotón absorbido en el camino de vuelta a distancia s del
+    fondo aparece, medido desde el frente, en W − s.
+    """
     rebota = rng.random(n) < reflectancia
-    u = rng.random(n)
-    x_abs_cm = -np.log(np.clip(u, 1e-12, 1.0)) / alpha
-    return rebota, x_abs_cm > W_cm, cm_a_um(x_abs_cm)
+    x_abs_cm = -np.log(np.clip(rng.random(n), 1e-12, 1.0)) / alpha
+    escapa = x_abs_cm > W_cm
+
+    if reflector:
+        vuelve = escapa & (rng.random(n) < C.R_CONTACTO_AL)
+        s = -np.log(np.clip(rng.random(n), 1e-12, 1.0)) / alpha
+        muere_volviendo = vuelve & (s < W_cm)
+        x_abs_cm = np.where(muere_volviendo, W_cm - s, x_abs_cm)
+        escapa = escapa & ~muere_volviendo
+
+    return rebota, escapa, cm_a_um(x_abs_cm)
 
 
 def figura_celda_3d(lambda_nm, alpha_cm, reflectancia, d_n_um, W_um, juntura=None,
                     profundidad_vista_um=None, irradiancia=1.0, modo="mono",
                     espectro=None, exagerar_deplexion=False, coleccion=None,
-                    semilla=7):
+                    reflector=False, semilla=7):
     """
     Bloque de la celda con fotones cayendo.
 
@@ -115,7 +132,8 @@ def figura_celda_3d(lambda_nm, alpha_cm, reflectancia, d_n_um, W_um, juntura=Non
         colores = hex_de_longitud_onda(lambda_nm)
         etiqueta = f"Fotones de {lambda_nm:.0f} nm"
 
-    rebota, atraviesa, x_abs_um = _sortear_fotones(n, alpha_foton, refl_foton, W_cm, rng)
+    rebota, atraviesa, x_abs_um = _sortear_fotones(
+        n, alpha_foton, refl_foton, W_cm, rng, reflector)
     lat_x = rng.uniform(4, ANCHO_LATERAL - 4, n)
     lat_y = rng.uniform(4, ANCHO_LATERAL - 4, n)
 
@@ -262,14 +280,33 @@ def figura_celda_3d(lambda_nm, alpha_cm, reflectancia, d_n_um, W_um, juntura=Non
     return fig, n
 
 
-def resumen_sorteo(alpha_cm, reflectancia, W_cm, d_n_cm):
-    """Reparto analítico de los fotones de un color, para contrastar con la animación."""
+def resumen_sorteo(alpha_cm, reflectancia, W_cm, d_n_cm, reflector=False):
+    """
+    Reparto analítico de los fotones de un color, para contrastar con la animación.
+
+    Con reflector se cuenta el segundo paso, igual que hace el campo óptico, y se
+    separa lo que absorbe el aluminio de lo que escapa por el frente. Antes esta
+    tabla y la animación mostraban un solo paso mientras las cifras de arriba ya
+    incluían el retorno: las dos vistas se contradecían (ver D-23).
+    """
     entra = 1.0 - reflectancia
     en_emisor = entra * (1.0 - np.exp(-alpha_cm * d_n_cm))
-    hasta_el_fondo = entra * np.exp(-alpha_cm * W_cm)
+    llega_al_fondo = entra * np.exp(-alpha_cm * W_cm)
+    en_base = entra - en_emisor - llega_al_fondo
+
+    if not reflector:
+        return {"reflejados": reflectancia, "en_emisor": en_emisor,
+                "en_base": en_base, "atraviesan": llega_al_fondo,
+                "absorbido_en_aluminio": 0.0}
+
+    devuelto = llega_al_fondo * C.R_CONTACTO_AL
+    en_aluminio = llega_al_fondo * (1.0 - C.R_CONTACTO_AL)
+    absorbido_volviendo = devuelto * (1.0 - np.exp(-alpha_cm * W_cm))
+    escapa_por_el_frente = devuelto * np.exp(-alpha_cm * W_cm)
     return {
         "reflejados": reflectancia,
         "en_emisor": en_emisor,
-        "en_base": entra - en_emisor - hasta_el_fondo,
-        "atraviesan": hasta_el_fondo,
+        "en_base": en_base + absorbido_volviendo,
+        "atraviesan": escapa_por_el_frente,
+        "absorbido_en_aluminio": en_aluminio,
     }

@@ -60,6 +60,35 @@ def corriente_de_cortocircuito(campo, eqe):
     return float(C.Q * np.trapezoid(campo.Nph * eqe, campo.lambda_nm))
 
 
+def absorbida_en_silicio(campo, W_cm):
+    """
+    Fraccion de los fotones incidentes que el silicio realmente absorbe.
+
+        A = (1 - R)(1 - e^{-alpha W})
+
+    Es lo que queda tras descontar lo reflejado en el frente y lo transmitido
+    hasta el fondo, en un solo paso.
+    """
+    return (1.0 - campo.R) * (1.0 - np.exp(-campo.alpha * W_cm))
+
+
+def iqe_referida_a_absorcion(campo, eqe, W_cm):
+    """
+    Eficiencia cuantica por foton **absorbido**, no por foton que entro.
+
+    El enunciado y la Unidad 3 definen IQE = EQE/(1-R), que descuenta solo la
+    reflexion frontal. Esa definicion mezcla dos perdidas distintas cuando la
+    luz atraviesa la celda: en el infrarrojo, la mayor parte de lo que le falta
+    para llegar a 1 no es recombinacion sino **absorcion incompleta**.
+
+    Esta segunda curva divide por lo realmente absorbido, asi que aisla la
+    calidad de coleccion. Se muestra junto a la del enunciado, no en su lugar
+    (ver D-24).
+    """
+    a = absorbida_en_silicio(campo, W_cm)
+    return np.divide(eqe, a, out=np.zeros_like(eqe), where=a > 1e-6)
+
+
 def cota_superior(campo):
     """
     Cota física que la eficiencia cuántica no puede superar: 1 − R.

@@ -40,23 +40,55 @@ from units import voltaje_termico
 EXPONENTE_MAXIMO = 600.0
 
 
-def corriente_saturacion(na, nd, tr, t_k):
+def factor_region_finita(w, L, S, D):
+    """
+    Corrección de una región neutra de ancho finito con recombinación superficial.
+
+        F = [tanh(w/L) + S·L/D] / [1 + (S·L/D)·tanh(w/L)]
+
+    Sale de resolver la misma ecuación de difusión que la probabilidad de
+    colección, con el exceso de minoritarios fijado en la juntura y la condición
+    D·Δn' = −S·Δn en la cara exterior. Sus tres límites son los esperados:
+    F → 1 cuando la región es mucho más larga que la longitud de difusión,
+    F → tanh(w/L) con superficie perfectamente pasivada, y F → coth(w/L) con
+    superficie infinitamente ávida.
+    """
+    x = np.clip(w / L, 0.0, 50.0)
+    t = np.tanh(x)
+    k = S * L / D
+    return (t + k) / (1.0 + k * t)
+
+
+def corriente_saturacion(na, nd, tr, t_k, union=None, W_cm=None):
     """
     Densidad de corriente de saturación inversa, en A/cm2.
 
-    J0 = q·ni²·(Dn/(NA·Ln) + Dp/(ND·Lp))   (U3, lámina 13)
+    J0 = q·ni²·[ (Dn/(NA·Ln))·Fb + (Dp/(ND·Lp))·Fe ]   (U3, lámina 13)
 
     Es la fuga del diodo en oscuridad: mide qué tan bien construida está la
     juntura. Cada término dice cuántos minoritarios logran cruzar desde un lado;
     sube con la concentración intrínseca y baja con el dopaje.
 
-    Con nuestros parámetros el término de la base domina al del emisor en razón
-    1200 a 1, que es lo que acota el error de usar estadística de Boltzmann en un
-    emisor degenerado (ver D-05).
+    Los factores F corrigen por espesor finito y recombinación superficial. Sin
+    ellos la expresión supone regiones mucho más largas que la longitud de
+    difusión, supuesto que **no se cumple en esta celda**: la longitud en la base
+    es de 314 µm sobre una base de 100 µm. Usar la forma de base larga en
+    oscuridad mientras la colección usa la forma finita es incoherente, porque son
+    la misma ecuación con las mismas condiciones de borde (ver D-20).
+
+    Si no se entrega geometría se cae a la forma de base larga, que es la del
+    enunciado, y se declara como aproximación.
     """
     ni = float(concentracion_intrinseca(t_k))
     termino_base = tr.D_n / (na * tr.L_n)
     termino_emisor = tr.D_p / (nd * tr.L_p)
+
+    if union is not None and W_cm is not None:
+        ancho_base = max(W_cm - union.x_p, 1e-9)
+        ancho_emisor = max(union.x_n, 1e-9)
+        termino_base *= factor_region_finita(ancho_base, tr.L_n, tr.S_r, tr.D_n)
+        termino_emisor *= factor_region_finita(ancho_emisor, tr.L_p, tr.S_f, tr.D_p)
+
     return C.Q * ni ** 2 * (termino_base + termino_emisor), termino_base, termino_emisor
 
 

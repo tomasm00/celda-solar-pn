@@ -9,6 +9,7 @@ from physics.material import juntura as resolver_juntura
 from physics.optics import campo_optico
 from physics.quantum_efficiency import (
     cota_superior,
+    iqe_referida_a_absorcion,
     corriente_de_cortocircuito,
     curvas_por_tiempo_de_vida,
     eficiencia_cuantica,
@@ -38,13 +39,14 @@ def _resolver(d_n_um, W_p_um, na, nd, t_c, reflector, irradiancia,
 
 
 @st.cache_data(show_spinner=False, max_entries=24)
-def _mapa(_campo, _union, W, _tr, tau_n_us, s_f, dispersion, i_lambda, n_sectores):
+def _mapa(_campo, _union, W, _tr, huella, tau_n_us, s_f, dispersion,
+          i_lambda, n_sectores):
     sectores = generar_sectores(n_sectores, tau_n_us * 1e-6, s_f, dispersion)
     return sectores, mapa_iqe_local(_campo, _union, W, _tr, sectores, i_lambda)
 
 
 @st.cache_data(show_spinner=False, max_entries=12)
-def _familia_curvas(_campo, _union, W, _tr, taus_us):
+def _familia_curvas(_campo, _union, W, _tr, huella, taus_us):
     return curvas_por_tiempo_de_vida(_campo, _union, W, _tr,
                                      [t * 1e-6 for t in taus_us])
 
@@ -61,6 +63,9 @@ def render():
     campo, union, tr, W, eqe, iqe = _resolver(
         s.d_n_um, s.W_p_um, s.NA, s.ND, s.T_c, s.reflector_trasero,
         s.irradiancia_soles, s.mu_p, s.tau_p_us, s.mu_n, s.tau_n_us, s.S_f, s.S_r)
+
+    huella = (s.d_n_um, s.W_p_um, s.NA, s.ND, s.T_c, s.reflector_trasero,
+              s.irradiancia_soles, s.mu_p, s.tau_p_us, s.mu_n, s.S_r)
 
     cota = cota_superior(campo)
     jsc = corriente_de_cortocircuito(campo, eqe)
@@ -89,15 +94,19 @@ def render():
     g1, g2 = st.columns(2, gap="large")
     with g1:
         st.plotly_chart(
-            qe_plots.curvas_eficiencia(campo.lambda_nm, eqe, iqe, cota, s.lambda_nm),
+            qe_plots.curvas_eficiencia(campo.lambda_nm, eqe, iqe, cota, s.lambda_nm,
+                                       iqe_referida_a_absorcion(campo, eqe, W)),
             use_container_width=True)
         st.caption(
-            "La distancia entre la curva externa y la cota punteada es exactamente lo "
-            "que se pierde por reflexión en la superficie. La distancia entre la interna "
-            "y el 100 % es lo que se pierde por recombinación."
+            "La cota punteada ya tiene descontada la reflexión: **la distancia entre "
+            "ella y la curva externa no es reflexión**, sino la suma de la luz que "
+            "atraviesa la celda sin absorberse más los pares que se recombinan. Por eso "
+            "se dibuja también la eficiencia por fotón *absorbido*, que sí aísla la "
+            "calidad de colección: en el infrarrojo las dos se separan muchísimo, y esa "
+            "separación es absorción incompleta, no recombinación."
         )
     with g2:
-        curvas = _familia_curvas(campo, union, W, tr, TAUS_COMPARACION_US)
+        curvas = _familia_curvas(campo, union, W, tr, huella, TAUS_COMPARACION_US)
         st.plotly_chart(
             qe_plots.curvas_por_tiempo_de_vida(campo.lambda_nm, curvas, s.d_n_um),
             use_container_width=True)
@@ -135,8 +144,8 @@ def render():
         )
 
     i_mapa = int(np.argmin(np.abs(campo.lambda_nm - lam_mapa)))
-    sectores, mapa = _mapa(campo, union, W, tr, s.tau_n_us, s.S_f, dispersion,
-                           i_mapa, config.N_SECTORES)
+    sectores, mapa = _mapa(campo, union, W, tr, huella, s.tau_n_us, s.S_f,
+                           dispersion, i_mapa, config.N_SECTORES)
 
     m1, m2, m3 = st.columns(3)
     m1.metric("IQE local mínima", f"{100 * mapa.min():.1f} %")
@@ -163,9 +172,8 @@ def render():
     st.plotly_chart(qe_plots.histograma_sectores(mapa, campo.lambda_nm[i_mapa]),
                     use_container_width=True)
 
-    st.info(
-        "La curva corriente-voltaje es el Hito 5. Ahí la corriente de cortocircuito que "
-        "esta pestaña calcula por la vía óptica se comparará contra la que se lea de la "
-        "curva eléctrica: es la verificación V3, el criterio más importante del problema.",
-        icon="🔧",
+    st.caption(
+        "La corriente que esta pestaña calcula por la vía óptica se compara contra la "
+        "leída de la curva eléctrica de la Pestaña 3: es la verificación V3, el criterio "
+        "más importante del problema."
     )

@@ -80,7 +80,6 @@ ESTADO_INICIAL = {
     # del curso (decision D-09).
     "mu_n": 1200.0,             # cm2/(V*s)  movilidad de electrones en la base
     "mu_p": 60.0,               # cm2/(V*s)  movilidad de huecos en el emisor
-    "Eg": 1.12,                 # eV         banda prohibida a 300 K
 }
 
 # ---------------------------------------------------------------------------
@@ -104,7 +103,6 @@ RANGOS = {
     "ancho_dedo_um": (20.0, 300.0),
     "mu_n": (200.0, 1500.0),
     "mu_p": (20.0, 500.0),
-    "Eg": (0.8, 1.6),
 }
 
 # El enunciado fija 15-75 C para los controles de la Pestaña 3 y para la

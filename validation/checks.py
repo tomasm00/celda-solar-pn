@@ -230,7 +230,7 @@ def v1_balance_de_fotones(d_n_um=5.0, W_p_um=100.0) -> Verificacion:
     )
 
 
-def _perfil_coleccion_por_defecto():
+def _perfil_coleccion_por_defecto(recortar=True):
     """Perfil de colección con los parametros de la semilla, para los chequeos."""
     from physics.collection import probabilidad_coleccion, transporte
     from physics.material import juntura
@@ -244,7 +244,7 @@ def _perfil_coleccion_por_defecto():
     x = grilla_profundidad(d_n, W_p, np.linspace(union.x_n, union.x_p, 12))
     tr = transporte(e["mu_p"], e["tau_p_us"] * 1e-6, e["mu_n"],
                     e["tau_n_us"] * 1e-6, e["S_f"], e["S_r"], t_k)
-    return x, union, probabilidad_coleccion(x, union, d_n + W_p, tr)
+    return x, union, probabilidad_coleccion(x, union, d_n + W_p, tr, recortar)
 
 
 def chequeo_coleccion_acotada() -> Verificacion:
@@ -254,7 +254,7 @@ def chequeo_coleccion_acotada() -> Verificacion:
     Chequeo estructural. Si falla, hay un error de formula o de signo, no un
     problema de modelo fisico.
     """
-    _, _, fc = _perfil_coleccion_por_defecto()
+    _, _, fc = _perfil_coleccion_por_defecto(recortar=False)
     peor = max(float(np.max(fc)) - 1.0, -float(np.min(fc)), 0.0)
     return Verificacion(
         codigo="C-T1",
@@ -263,7 +263,9 @@ def chequeo_coleccion_acotada() -> Verificacion:
         referencia=1.0,
         unidad="-",
         tolerancia_rel=1e-9,
-        nota="Chequeo estructural sobre toda la grilla de profundidad.",
+        nota=("Chequeo estructural sobre toda la grilla, evaluado ANTES del recorte "
+              "de seguridad a [0,1]. Comprobarlo despues del recorte no podria "
+              "fallar nunca y no verificaria nada."),
     )
 
 
@@ -394,7 +396,8 @@ def _celda_electrica(t_c=None, s_f=None, ancho_dedo_cm=None):
     fc = probabilidad_coleccion(campo.x_cm, union, d_n + W_p, tr)
     eqe, _ = eficiencia_cuantica(campo, fc)
     j_l = corriente_de_cortocircuito(campo, eqe)
-    j0, _, _ = corriente_saturacion(e["NA"], e["ND"], tr, t_k)
+    j0, _, _ = corriente_saturacion(e["NA"], e["ND"], tr, t_k,
+                                    union=union, W_cm=d_n + W_p)
     grid = malla(e["n_dedos"],
                  (e["ancho_dedo_um"] * 1e-4) if ancho_dedo_cm is None else ancho_dedo_cm)
     return j_l, j0, grid, t_k
@@ -497,6 +500,45 @@ def v6_coeficiente_de_temperatura() -> Verificacion:
     )
 
 
+def c_t5_trampa_de_la_forma_explicita() -> Verificacion:
+    """
+    Comprueba que el solver resuelve la ecuacion implicita y no su forma explicita.
+
+    V4 no puede detectarlo: el enunciado la define con Rs -> 0, y sin resistencia
+    serie el termino Rs*J desaparece y las dos formas coinciden exactamente. Un
+    solver que ignorara el termino aprobaria V4 igual.
+
+    Esta verificacion evalua con resistencia serie **no nula**, que es donde la
+    trampa se manifiesta, y exige que el factor de forma correcto quede por debajo
+    del que da el atajo. Detectado por auditoria externa (ver D-27).
+    """
+    from physics.diode import curva_iv
+
+    e = config.ESTADO_INICIAL
+    j_l, j0, grid, t_k = _celda_electrica()
+    rs = e["R_s"] + grid.r_serie
+    jl_neto = j_l * (1.0 - grid.fraccion_sombra)
+    curva = curva_iv(j0, jl_neto, rs, e["R_p"], e["n_idealidad"], t_k)
+
+    vt_n = e["n_idealidad"] * C.KB_EV * t_k
+    j_ingenua = (jl_neto - j0 * (np.exp(np.clip(curva.v / vt_n, 0, 600)) - 1)
+                 - curva.v / e["R_p"])
+    ff_ingenuo = float((curva.v * np.maximum(j_ingenua, 0.0)).max()
+                       / (curva.v_oc * curva.j_sc))
+
+    return Verificacion(
+        codigo="C-T5",
+        nombre="El solver resuelve la ecuacion implicita, no su atajo",
+        calculado=curva.ff,
+        referencia=ff_ingenuo,
+        unidad="-",
+        modo="maximo",
+        nota=(f"Con Rs = {rs:.3f} ohm*cm2 el atajo sobrestima el factor de forma en "
+              f"{100 * (ff_ingenuo / curva.ff - 1):.1f} %. Si ambos coincidieran, el "
+              f"solver estaria ignorando la caida de voltaje sobre la resistencia."),
+    )
+
+
 def c_t4_voltaje_bajo_el_bandgap() -> Verificacion:
     """
     Cota fisica: el voltaje de circuito abierto no puede superar la banda prohibida.
@@ -570,6 +612,57 @@ def v7_efecto_del_sombreado() -> Verificacion:
     )
 
 
+def c_t6_pestanas_coherentes() -> Verificacion:
+    """
+    Con la celda homogenea y sin defectos, el solver por sectores y el escalar
+    deben entregar el mismo voltaje de circuito abierto.
+
+    Son dos implementaciones distintas de la misma ecuacion, asi que discrepar
+    significa que una de las dos esta mal. Antes discrepaban en 2,4 mV a 45 C y en
+    99 mV a -15 C, por dos errores del solver vectorizado que esta verificacion no
+    habria dejado pasar (ver D-18).
+    """
+    from physics.collection import transporte
+    from physics.diode import curva_iv
+    from physics.material import juntura
+    from physics.optics import campo_optico
+    from physics.quantum_efficiency import (corriente_de_cortocircuito,
+                                            eficiencia_cuantica, generar_sectores)
+    from physics.sectors import (Defectos, armar_celda, curva_global,
+                                 parametros_de_curva)
+    from units import celsius_a_kelvin, um_a_cm
+
+    e = config.ESTADO_INICIAL
+    t_k = celsius_a_kelvin(e["T_c"])
+    d_n, W_p = um_a_cm(e["d_n_um"]), um_a_cm(e["W_p_um"])
+    W = d_n + W_p
+    union = juntura(d_n, e["NA"], e["ND"], t_k)
+    campo = campo_optico(d_n, W_p, e["reflector_trasero"], 1.0,
+                         np.linspace(max(union.x_n, 0.0), union.x_p, 12))
+    tr = transporte(e["mu_p"], e["tau_p_us"] * 1e-6, e["mu_n"],
+                    e["tau_n_us"] * 1e-6, e["S_f"], e["S_r"], t_k)
+
+    j_l, j0, grid, _ = _celda_electrica()
+    escalar = curva_iv(j0, j_l * (1.0 - grid.fraccion_sombra),
+                       e["R_s"] + grid.r_serie, e["R_p"], e["n_idealidad"], t_k)
+
+    sectores = generar_sectores(config.N_SECTORES, e["tau_n_us"] * 1e-6, e["S_f"], 0.0)
+    celda = armar_celda(campo, union, W, tr, sectores, Defectos(), e["n_dedos"],
+                        e["ancho_dedo_um"] * 1e-4, e["R_s"], e["NA"], e["ND"], t_k)
+    v, j, v_oc = curva_global(celda, e["R_p"], e["n_idealidad"], t_k)
+    por_sectores = parametros_de_curva(v, j, C.IRRADIANCE_1SUN, v_oc)
+
+    return Verificacion(
+        codigo="C-T6",
+        nombre="Pestanas 3 y 4 coherentes con celda homogenea",
+        calculado=1e3 * por_sectores["v_oc"],
+        referencia=1e3 * escalar.v_oc,
+        unidad="mV",
+        tolerancia_rel=1e-4,
+        nota="Dos implementaciones de la misma ecuacion: discrepar es un error.",
+    )
+
+
 # V2 del enunciado combina dos criterios de naturaleza distinta -una banda de
 # tolerancia en el azul y un umbral en el infrarrojo-, asi que se reporta como
 # dos entradas: V2a y V2b, implementadas arriba.
@@ -584,6 +677,8 @@ VERIFICACIONES_ENUNCIADO = (
     v6_coeficiente_de_temperatura,
     v7_efecto_del_sombreado,
     c_t4_voltaje_bajo_el_bandgap,
+    c_t5_trampa_de_la_forma_explicita,
+    c_t6_pestanas_coherentes,
 )
 
 
