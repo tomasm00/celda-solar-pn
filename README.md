@@ -1,0 +1,116 @@
+# Laboratorio virtual de caracterización de una celda p-n de silicio
+
+Simulación interactiva de los procesos físicos de una celda solar de silicio cristalino,
+desde la absorción de un fotón hasta la potencia entregada. Construida con Streamlit.
+
+**Proyecto 1 · Problema 2.2 · Celdas Solares Fotovoltaicas · Semestre 2026-2**
+Semilla S = 6 · N_A = 4×10¹⁶ cm⁻³ · N_D = 6×10¹⁹ cm⁻³ · τ_SRH = 30 µs · S_frontal = 2×10⁴ cm/s · 45 °C
+
+---
+
+## La celda modelada
+
+Un bloque de silicio tipo p de 100 µm que actúa como base, con una capa de silicio tipo n
+de 5 µm encima que actúa como emisor. Contactos frontales de plata en forma de dedos y un
+contacto trasero de aluminio. Sin recubrimiento antirreflejo ni estructura multicapa: la
+óptica se resuelve con la ley de Beer-Lambert, con reflexión frontal en la interfaz
+aire-silicio y un reflector metálico en la cara trasera.
+
+## Arquitectura
+
+Las pestañas no son cuatro programas pegados: son una sola cadena donde cada una consume lo
+que la anterior produjo.
+
+```
+datos medidos ──► Pestaña 1 ──► Pestaña 2 ──► Pestaña 3 ──► Pestaña 4
+                  generación    eficiencia    curva I-V     sectores
+                  G(x,λ)        cuántica      Jsc Voc FF η  y defectos
+                       │             │             │            │
+                       └─────────────┴─────────────┴────────────┴──► Pestaña 5
+                                                                     validación
+```
+
+La corriente fotogenerada de la Pestaña 3 **no es un parámetro libre**: sale de integrar la
+eficiencia cuántica de la Pestaña 2, que a su vez pondera la generación de la Pestaña 1. Esa
+es la condición que verifica el criterio V3 del enunciado.
+
+### Organización del código
+
+| Capa | Contenido |
+|---|---|
+| `app.py` | Solo interfaz y orquestación. **Cero física.** |
+| `constants.py` | Toda constante con su unidad y su fuente. Sin números sueltos en el código. |
+| `units.py` | Conversiones de unidades con nombre. Ninguna al paso dentro de un cálculo. |
+| `config.py` | Semilla, Tabla A.1 del Anexo A, estado inicial y rangos de los controles. |
+| `data/` | Archivos de datos medidos y sus cargadores con verificación de columnas. |
+| `physics/` | El modelo. Un módulo por eslabón de la cadena. |
+| `visualization/` | Construcción de figuras. No calcula física. |
+| `validation/` | Las 16 verificaciones, cada una devolviendo calculado, referencia, error y veredicto. |
+| `ui/` | Una pestaña por módulo, más la barra lateral compartida. |
+
+### Módulos de física
+
+- **`optics.py`** — Beer-Lambert, reflectancia, generación de pares y grilla de profundidad.
+- **`material.py`** — concentración intrínseca, difusividades, longitudes de difusión, potencial de contacto y zona de deplexión.
+- **`collection.py`** — probabilidad de que un par nacido a cada profundidad llegue vivo a la juntura.
+- **`quantum_efficiency.py`** — eficiencia cuántica externa e interna, y la grilla de sectores.
+- **`diode.py`** — corriente de saturación y la ecuación implícita del diodo, resuelta por búsqueda de raíz.
+- **`front_grid.py`** — sombreado y resistencia serie de la malla de dedos de plata.
+- **`sectors.py`** — los 64 sectores en paralelo y la propagación de defectos localizados.
+
+## Datos externos
+
+| Archivo | Contenido | Fuente |
+|---|---|---|
+| `data/astmg173.xls` | Espectro solar AM1.5G, columna *Global tilt* | ASTM G173-03, provisto por el curso |
+| `data/Green-2008_silicon_nk.csv` | Índice de refracción y coeficiente de extinción del silicio, 250–1450 nm | M. A. Green, *Solar Energy Materials and Solar Cells* **92** (2008) 1305-1310 |
+
+Ningún dato es inventado ni ajustado a mano. El coeficiente de absorción se deriva del
+índice de extinción medido mediante α = 4πk/λ.
+
+## Librerías
+
+| Librería | Para qué | Qué supone |
+|---|---|---|
+| **NumPy** | Álgebra vectorial de todas las integrales espectrales y de profundidad | Aritmética de punto flotante de doble precisión |
+| **SciPy** | `brentq` para la ecuación implícita del diodo | La raíz está encerrada en un intervalo con cambio de signo |
+| **pandas** | Lectura de la planilla del espectro y tablas de la interfaz | — |
+| **Plotly** | Todas las figuras, incluidas las tridimensionales y las animadas | — |
+| **Streamlit** | Capa de despliegue web y manejo de estado compartido | — |
+| **xlrd** | Lectura del formato `.xls` heredado del espectro | — |
+
+Ninguna resuelve física del dispositivo: todo el modelo está implementado en `physics/`.
+`solcore` no se usa, como exige el enunciado.
+
+## Validación
+
+Dieciséis verificaciones que corren solas al abrir la pestaña correspondiente. Incluyen las
+siete que exige el enunciado. El valor calculado sale siempre del modelo; solo el de
+referencia está almacenado.
+
+Una de ellas, V2a, no aprueba: el dato medido de Green da 0,415 µm de profundidad de
+absorción a 450 nm donde el enunciado pone «del orden de 1 µm». Se decidió mantener el dato
+medido, que es el físicamente correcto, y reportar la discrepancia con su explicación en
+lugar de ajustar el dato.
+
+## Correr en local
+
+```bash
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m streamlit run app.py
+```
+
+Las verificaciones sin abrir la aplicación:
+
+```bash
+.venv\Scripts\python.exe -m validation.checks
+```
+
+Requiere Python 3.10 o superior.
+
+## Decisiones de modelamiento
+
+Las diecisiete decisiones de modelamiento, con su motivo y su clasificación —requisito del
+enunciado, decisión de diseño propia, o conocimiento externo declarado— están en
+[`DECISIONES.md`](DECISIONES.md).
