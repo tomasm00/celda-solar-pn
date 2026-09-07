@@ -3,6 +3,8 @@
 Simulación interactiva de los procesos físicos de una celda solar de silicio cristalino,
 desde la absorción de un fotón hasta la potencia entregada. Construida con Streamlit.
 
+> **Aplicación en línea:** `[ pendiente: pegar aquí la URL de Streamlit Cloud ]`
+
 **Proyecto 1 · Problema 2.2 · Celdas Solares Fotovoltaicas · Semestre 2026-2**
 Semilla S = 6 · N_A = 4×10¹⁶ cm⁻³ · N_D = 6×10¹⁹ cm⁻³ · τ_SRH = 30 µs · S_frontal = 2×10⁴ cm/s · 45 °C
 
@@ -45,7 +47,7 @@ es la condición que verifica el criterio V3 del enunciado.
 | `data/` | Archivos de datos medidos y sus cargadores con verificación de columnas. |
 | `physics/` | El modelo. Un módulo por eslabón de la cadena. |
 | `visualization/` | Construcción de figuras. No calcula física. |
-| `validation/` | Las 16 verificaciones, cada una devolviendo calculado, referencia, error y veredicto. |
+| `validation/` | Las 18 verificaciones, cada una devolviendo calculado, referencia, error y veredicto. |
 | `ui/` | Una pestaña por módulo, más la barra lateral compartida. |
 
 ### Módulos de física
@@ -84,14 +86,25 @@ Ninguna resuelve física del dispositivo: todo el modelo está implementado en `
 
 ## Validación
 
-Dieciséis verificaciones que corren solas al abrir la pestaña correspondiente. Incluyen las
+Dieciocho verificaciones que corren solas al abrir la pestaña correspondiente. Incluyen las
 siete que exige el enunciado. El valor calculado sale siempre del modelo; solo el de
 referencia está almacenado.
 
-Una de ellas, V2a, no aprueba: el dato medido de Green da 0,415 µm de profundidad de
-absorción a 450 nm donde el enunciado pone «del orden de 1 µm». Se decidió mantener el dato
-medido, que es el físicamente correcto, y reportar la discrepancia con su explicación en
-lugar de ajustar el dato.
+Una de ellas, V2a, queda marcada como informativa y no como falla: el dato medido de Green
+da 0,415 µm de profundidad de absorción a 450 nm donde el enunciado pone «del orden de
+1 µm». Se decidió mantener el dato medido, que es el físicamente correcto, y reportar la
+discrepancia con su explicación en lugar de ajustar el dato. Descontada esa, el modelo pasa
+las dieciocho sin ninguna falla real.
+
+Los valores que entrega la celda de la semilla, a 45 °C y un sol:
+
+| Magnitud | Valor |
+|---|---|
+| Corriente de cortocircuito | 14,5526 mA/cm² |
+| Voltaje de circuito abierto | 0,587100 V |
+| Factor de forma | 0,769274 |
+| Eficiencia | 6,5726 % |
+| Coeficiente térmico del voltaje | −2,209 mV/°C |
 
 ## Correr en local
 
@@ -111,6 +124,9 @@ Requiere Python 3.10 o superior.
 
 ## Decisiones de modelamiento
 
-Las diecisiete decisiones de modelamiento, con su motivo y su clasificación —requisito del
+Las veintisiete decisiones de modelamiento, con su motivo y su clasificación —requisito del
 enunciado, decisión de diseño propia, o conocimiento externo declarado— están en
 [`DECISIONES.md`](DECISIONES.md).
+
+Las diez últimas, D-18 a D-27, documentan las correcciones hechas tras una auditoría
+externa independiente del código.
