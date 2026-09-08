@@ -180,6 +180,21 @@ def render():
                 *config.RANGOS["ancho_dedo_um"], key="ancho_dedo_um", step=5.0,
             )
 
+        with st.expander("Variación de fabricación", expanded=True):
+            st.slider(
+                "Dispersión entre sectores",
+                *config.RANGOS["dispersion_sectores"], key="dispersion_sectores",
+                step=0.05,
+                help="Desviación logarítmica del tiempo de vida y la pasivación entre "
+                     "sectores. Es un solo control para toda la aplicación: la celda es "
+                     "una sola, y las Pestañas 2 y 4 tienen que describirla igual.",
+            )
+            st.caption(
+                "En cero la celda queda homogénea, que es la que define la Tabla A.1 y "
+                "la que describen las cifras reportadas. Al subirla, la respuesta de la "
+                "celda pasa a ser el promedio por área de sus sectores."
+            )
+
         with st.expander("Parámetros del material (Anexo B)"):
             st.caption(
                 "Valores fijados por el Anexo B del enunciado. Se exponen para poder "

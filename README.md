@@ -47,7 +47,7 @@ es la condición que verifica el criterio V3 del enunciado.
 | `data/` | Archivos de datos medidos y sus cargadores con verificación de columnas. |
 | `physics/` | El modelo. Un módulo por eslabón de la cadena. |
 | `visualization/` | Construcción de figuras. No calcula física. |
-| `validation/` | Las 18 verificaciones, cada una devolviendo calculado, referencia, error y veredicto. |
+| `validation/` | Las 20 verificaciones, cada una devolviendo calculado, referencia, error y veredicto. |
 | `ui/` | Una pestaña por módulo, más la barra lateral compartida. |
 
 ### Módulos de física
@@ -86,7 +86,7 @@ Ninguna resuelve física del dispositivo: todo el modelo está implementado en `
 
 ## Validación
 
-Dieciocho verificaciones que corren solas al abrir la pestaña correspondiente. Incluyen las
+Veinte verificaciones que corren solas al abrir la pestaña correspondiente. Incluyen las
 siete que exige el enunciado. El valor calculado sale siempre del modelo; solo el de
 referencia está almacenado.
 
@@ -94,7 +94,7 @@ Una de ellas, V2a, queda marcada como informativa y no como falla: el dato medid
 da 0,415 µm de profundidad de absorción a 450 nm donde el enunciado pone «del orden de
 1 µm». Se decidió mantener el dato medido, que es el físicamente correcto, y reportar la
 discrepancia con su explicación en lugar de ajustar el dato. Descontada esa, el modelo pasa
-las dieciocho sin ninguna falla real.
+las veinte sin ninguna falla real.
 
 Los valores que entrega la celda de la semilla, a 45 °C y un sol:
 
@@ -124,9 +124,9 @@ Requiere Python 3.10 o superior.
 
 ## Decisiones de modelamiento
 
-Las veintisiete decisiones de modelamiento, con su motivo y su clasificación —requisito del
+Las treinta decisiones de modelamiento, con su motivo y su clasificación —requisito del
 enunciado, decisión de diseño propia, o conocimiento externo declarado— están en
 [`DECISIONES.md`](DECISIONES.md).
 
-Las diez últimas, D-18 a D-27, documentan las correcciones hechas tras una auditoría
-externa independiente del código.
+D-18 a D-27 documentan las correcciones hechas tras una auditoría externa independiente
+del código, y D-28 a D-30 las hechas tras la revisión del profesor.

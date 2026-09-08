@@ -663,6 +663,112 @@ def c_t6_pestanas_coherentes() -> Verificacion:
     )
 
 
+def _celda_con_dispersion(dispersion):
+    """Monta la celda a una dispersion dada y devuelve sus piezas."""
+    from physics.collection import transporte
+    from physics.material import juntura
+    from physics.optics import campo_optico
+    from physics.quantum_efficiency import coleccion_de_celda, generar_sectores
+    from units import celsius_a_kelvin, um_a_cm
+
+    e = config.ESTADO_INICIAL
+    t_k = celsius_a_kelvin(e["T_c"])
+    d_n, W_p = um_a_cm(e["d_n_um"]), um_a_cm(e["W_p_um"])
+    W = d_n + W_p
+    union = juntura(d_n, e["NA"], e["ND"], t_k)
+    campo = campo_optico(d_n, W_p, e["reflector_trasero"], 1.0,
+                         np.linspace(max(union.x_n, 0.0), union.x_p, 12))
+    tr = transporte(e["mu_p"], e["tau_p_us"] * 1e-6, e["mu_n"],
+                    e["tau_n_us"] * 1e-6, e["S_f"], e["S_r"], t_k)
+    sectores = generar_sectores(config.N_SECTORES, e["tau_n_us"] * 1e-6,
+                                e["S_f"], dispersion)
+    fc_celda, fc_locales = coleccion_de_celda(campo, union, W, tr, sectores)
+    return campo, union, tr, W, t_k, sectores, fc_celda, fc_locales
+
+
+def c_t7_la_celda_es_una_sola() -> Verificacion:
+    """
+    La celda no es un conjunto de celdas separadas.
+
+    Bajo iluminacion uniforme la eficiencia cuantica es lineal en la probabilidad
+    de coleccion, asi que el promedio por area de las eficiencias locales tiene que
+    ser identico a la eficiencia calculada con la coleccion promedio. Si las dos
+    vias no coinciden, en alguna parte se estan tratando los sectores como
+    dispositivos independientes, que es exactamente el error senalado (ver D-28).
+
+    La comprobacion se hace con dispersion distinta de cero: con la celda homogenea
+    ambas vias coinciden trivialmente y el test no mediria nada.
+    """
+    from physics.quantum_efficiency import eficiencia_cuantica
+
+    campo, _, _, _, _, _, fc_celda, fc_locales = _celda_con_dispersion(0.30)
+    eqe_de_la_media, _ = eficiencia_cuantica(campo, fc_celda)
+
+    planas = fc_locales.reshape(-1, fc_locales.shape[-1])
+    eqe_locales = np.array([eficiencia_cuantica(campo, f)[0] for f in planas])
+    media_de_las_eqe = eqe_locales.mean(axis=0)
+
+    error = float(np.max(np.abs(media_de_las_eqe - eqe_de_la_media)))
+    return Verificacion(
+        codigo="C-T7",
+        nombre="La celda es una sola, no 64 celdas separadas",
+        calculado=error,
+        referencia=1e-12,
+        unidad="EQE",
+        modo="maximo",
+        nota=("Promediar las eficiencias locales y calcular una sola eficiencia con la "
+              "coleccion promedio son la misma cosa. Es una identidad exacta, no una "
+              "aproximacion, y debe cumplirse a precision de maquina."),
+    )
+
+
+def c_t8_pestanas_coherentes_con_dispersion() -> Verificacion:
+    """
+    Las Pestanas 2, 3 y 4 describen la misma celda tambien con dispersion.
+
+    C-T6 comprueba la coherencia solo con la celda homogenea, que es justo el caso
+    en que las tres coinciden por construccion. Antes de D-28 cada pestaña montaba
+    su propia celda -y dos de ellas tenian su propio deslizador de dispersion-, de
+    modo que con dispersion distinta de cero describian dispositivos distintos sin
+    que ninguna verificacion lo notara.
+    """
+    from physics.diode import corriente_saturacion, curva_iv
+    from physics.front_grid import malla
+    from physics.quantum_efficiency import (corriente_de_cortocircuito,
+                                            eficiencia_cuantica)
+    from physics.sectors import (Defectos, armar_celda, curva_global,
+                                 parametros_de_curva)
+
+    e = config.ESTADO_INICIAL
+    campo, union, tr, W, t_k, sectores, fc_celda, _ = _celda_con_dispersion(0.30)
+
+    # Via de las Pestañas 2 y 3: la coleccion de la celda -> corriente -> curva.
+    eqe, _ = eficiencia_cuantica(campo, fc_celda)
+    j_l = corriente_de_cortocircuito(campo, eqe)
+    j0, _, _ = corriente_saturacion(e["NA"], e["ND"], tr, t_k, union=union, W_cm=W)
+    grid = malla(e["n_dedos"], e["ancho_dedo_um"] * 1e-4)
+    escalar = curva_iv(j0, j_l * (1.0 - grid.fraccion_sombra),
+                       e["R_s"] + grid.r_serie, e["R_p"], e["n_idealidad"], t_k)
+
+    # Via de la Pestaña 4: los mismos sectores resueltos en paralelo, sin defectos.
+    celda = armar_celda(campo, union, W, tr, sectores, Defectos(), e["n_dedos"],
+                        e["ancho_dedo_um"] * 1e-4, e["R_s"], e["NA"], e["ND"], t_k)
+    v, j, v_oc = curva_global(celda, e["R_p"], e["n_idealidad"], t_k)
+    por_sectores = parametros_de_curva(v, j, C.IRRADIANCE_1SUN, v_oc)
+
+    return Verificacion(
+        codigo="C-T8",
+        nombre="Pestanas coherentes tambien con dispersion",
+        calculado=1e3 * por_sectores["j_sc"],
+        referencia=1e3 * escalar.j_sc,
+        unidad="mA/cm2",
+        tolerancia_rel=2e-3,
+        nota=("Con dispersion 0,30 las dos vias tienen que seguir dando la misma "
+              "corriente. La tolerancia no es cero porque la Pestaña 4 promedia "
+              "corrientes de sectores con resistencia serie, no colecciones."),
+    )
+
+
 # V2 del enunciado combina dos criterios de naturaleza distinta -una banda de
 # tolerancia en el azul y un umbral en el infrarrojo-, asi que se reporta como
 # dos entradas: V2a y V2b, implementadas arriba.
@@ -679,6 +785,8 @@ VERIFICACIONES_ENUNCIADO = (
     c_t4_voltaje_bajo_el_bandgap,
     c_t5_trampa_de_la_forma_explicita,
     c_t6_pestanas_coherentes,
+    c_t7_la_celda_es_una_sola,
+    c_t8_pestanas_coherentes_con_dispersion,
 )
 
 

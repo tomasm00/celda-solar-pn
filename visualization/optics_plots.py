@@ -276,21 +276,52 @@ def acumulado_espectral(x_cm, lambda_nm, G, d_n_um, W_um):
     return _base(fig, alto=420, margen_superior=58)
 
 
-def mapa_generacion(x_cm, lambda_nm, G, d_n_um, W_um, n_lam=190, n_x=170):
-    """Mapa de generación en el plano color-profundidad."""
+def _avance_por_color(x_cm, lambda_nm, G, n_lam=200, n_x=180):
+    """
+    Fracción de los pares de cada color ya creados por encima de cada profundidad.
+
+    Normalizar cada color contra sí mismo, en vez de dibujar la generación
+    absoluta, es lo que hace legible el mapa. La generación abarca más de
+    trescientas décadas entre el ultravioleta que muere en nanómetros y el
+    infrarrojo que apenas se atenúa; con una escala logarítmica global el 26 % del
+    mapa quedaba contra el piso y 46 colores enteros salían planos, lo que se lee
+    como «aquí no se genera nada» y es falso (ver D-29).
+
+    Esta cantidad está acotada entre cero y uno, así que no necesita escala
+    logarítmica ni piso arbitrario, y cada color usa todo el rango de la paleta.
+    """
     idx_l = np.linspace(0, len(lambda_nm) - 1, n_lam).astype(int)
     idx_x = np.linspace(0, len(x_cm) - 1, n_x).astype(int)
-    x_um = cm_a_um(x_cm[idx_x])
-    z = G[np.ix_(idx_x, idx_l)].T
-    if np.any(z > 0):
-        z = np.log10(np.clip(z, z[z > 0].max() * 1e-6, None))
+    x = x_cm[idx_x]
+    g = G[np.ix_(idx_x, idx_l)]                      # (nx, nl)
+
+    paso = np.diff(x)[:, None]
+    acum = np.concatenate([np.zeros((1, g.shape[1])),
+                           np.cumsum(paso * (g[:-1] + g[1:]) / 2.0, axis=0)])
+    total = acum[-1]
+    frac = np.divide(acum, total, out=np.zeros_like(acum),
+                     where=total > 0)
+    return cm_a_um(x), lambda_nm[idx_l], frac
+
+
+def mapa_generacion(x_cm, lambda_nm, G, d_n_um, W_um, n_lam=200, n_x=180):
+    """Frente de absorción en el plano color-profundidad."""
+    x_um, lam, frac = _avance_por_color(x_cm, lambda_nm, G, n_lam, n_x)
 
     fig = go.Figure(go.Heatmap(
-        x=x_um, y=lambda_nm[idx_l], z=z, colorscale="Inferno",
-        colorbar=dict(title=dict(text="log₁₀ G", side="right"), thickness=12,
+        x=x_um, y=lam, z=100 * frac.T, colorscale="Viridis", zmin=0, zmax=100,
+        colorbar=dict(title=dict(text="% ya absorbido", side="right"), thickness=12,
                       len=0.85, y=0.45),
-        hovertemplate="x = %{x:.2f} µm<br>λ = %{y:.0f} nm<br>"
-                      "log₁₀G = %{z:.2f}<extra></extra>",
+        hovertemplate="x = %{x:.3g} µm<br>λ = %{y:.0f} nm<br>"
+                      "%{z:.1f} % de este color ya se absorbió<extra></extra>",
+    ))
+    # La curva del 50 % es el frente de absorción: donde cada color entrega la
+    # mitad de sus pares. Es la diagonal que la escala anterior escondía.
+    fig.add_trace(go.Contour(
+        x=x_um, y=lam, z=100 * frac.T, showscale=False, contours=dict(
+            start=50, end=50, size=1, coloring="none",
+            showlabels=True, labelfont=dict(size=10, color=TINTA)),
+        line=dict(color=ACENTO, width=2.2), hoverinfo="skip", name="mitad absorbida",
     ))
     fig.add_vline(x=d_n_um, line=dict(color="#8FD6FF", width=1.5, dash="dash"))
     fig.add_annotation(x=np.log10(d_n_um), y=1.0, yref="paper", text="juntura p-n",
@@ -299,9 +330,81 @@ def mapa_generacion(x_cm, lambda_nm, G, d_n_um, W_um, n_lam=190, n_x=170):
     fig.update_xaxes(title="Profundidad x  [µm]", type="log")
     fig.update_yaxes(title="Longitud de onda λ  [nm]")
     fig.update_layout(title=_titulo(
-        "A qué profundidad se absorbe cada color",
-        "la franja brillante arriba es el azul muriendo; la cola tenue, el rojo penetrando"))
-    return _base(fig, alto=430)
+        "El frente de absorción, color por color",
+        "cada fila se normaliza contra sí misma; la línea ámbar marca dónde cada "
+        "color ya entregó la mitad de sus pares"))
+    return _base(fig, alto=440)
+
+
+def relieve_generacion_3d(x_cm, lambda_nm, G, fc, d_n_um, W_um,
+                          n_lam=90, n_x=80):
+    """
+    Superficie tridimensional de dónde sale realmente la corriente.
+
+    No dibuja la generación, sino el producto de la generación por la probabilidad
+    de colección: los pares que además **sobreviven** hasta la juntura. Es la
+    densidad de corriente por unidad de profundidad y de longitud de onda, y su
+    integral sobre toda la superficie es exactamente la corriente fotogenerada.
+
+    Es la vista que separa las dos pérdidas de un vistazo: el hundimiento pegado a
+    la superficie frontal es recombinación superficial, y la cola que se apaga
+    hacia el infrarrojo es absorción incompleta.
+    """
+    idx_l = np.linspace(0, len(lambda_nm) - 1, n_lam).astype(int)
+    idx_x = np.linspace(0, len(x_cm) - 1, n_x).astype(int)
+    x = x_cm[idx_x]
+    x_um = cm_a_um(x)
+    lam = lambda_nm[idx_l]
+
+    # Aporte a la corriente por unidad de profundidad y de color.
+    aporte = G[np.ix_(idx_x, idx_l)] * np.asarray(fc)[idx_x, None]      # (nx, nl)
+
+    # El eje de profundidad es logaritmico, asi que la densidad que hay que dibujar
+    # es la ponderada por x: el area bajo x*(dJ/dx) frente a ln(x) es la corriente.
+    # Sin esa ponderacion la superficie es un pico en el ultravioleta y una llanura
+    # roja en todo lo demas, que es el mismo defecto del mapa antiguo (ver D-29).
+    densidad = (aporte * x[:, None]).T                                   # (nl, nx)
+
+    # Dos canales, porque son dos preguntas distintas. La altura, normalizada color
+    # a color, dice DONDE nace la corriente de ese color. El color de la superficie
+    # dice CUANTO aporta ese color al total, que es lo que la altura ya no puede
+    # decir despues de normalizar.
+    techo = np.maximum(densidad.max(axis=1, keepdims=True), 1e-30)
+    z = densidad / techo
+    reparto = np.trapezoid(aporte, x, axis=0)
+    reparto = reparto / max(reparto.max(), 1e-30)
+    color = np.repeat(reparto[:, None], len(x_um), axis=1)
+
+    fig = go.Figure(go.Surface(
+        x=np.log10(np.clip(x_um, 1e-4, None)), y=lam, z=z,
+        surfacecolor=color, colorscale="Inferno", cmin=0, cmax=1,
+        colorbar=dict(title=dict(text="aporte del color", side="right"),
+                      thickness=12, len=0.7),
+        contours=dict(z=dict(show=True, usecolormap=False, color=SUAVE,
+                             project_z=False, width=1)),
+        hovertemplate="x = %{customdata[0]:.3g} µm<br>λ = %{y:.0f} nm<br>"
+                      "aquí nace el %{z:.0%} del máximo de este color<br>"
+                      "este color aporta %{customdata[1]:.0%} del máximo"
+                      "<extra></extra>",
+        customdata=np.dstack([np.tile(x_um, (len(lam), 1)), color]),
+    ))
+    fig.update_layout(
+        title=_titulo("De dónde sale la corriente, en volumen",
+                      "generación multiplicada por la probabilidad de colección"),
+        height=520, margin=dict(l=6, r=6, t=58, b=6),
+        paper_bgcolor="rgba(0,0,0,0)", font=dict(color=TINTA, size=12),
+        scene=dict(
+            xaxis=dict(title="log₁₀ profundidad [µm]", gridcolor=REJILLA,
+                       backgroundcolor="rgba(0,0,0,0)", zerolinecolor=REJILLA),
+            yaxis=dict(title="λ [nm]", gridcolor=REJILLA,
+                       backgroundcolor="rgba(0,0,0,0)", zerolinecolor=REJILLA),
+            zaxis=dict(title="aporte relativo", gridcolor=REJILLA,
+                       backgroundcolor="rgba(0,0,0,0)", zerolinecolor=REJILLA),
+            camera=dict(eye=dict(x=1.7, y=-1.5, z=1.05)),
+            aspectratio=dict(x=1.25, y=1.15, z=0.62),
+        ),
+    )
+    return fig
 
 
 def balance_espectral(balance, lambda_marcada=None):

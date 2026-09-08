@@ -80,6 +80,16 @@ ESTADO_INICIAL = {
     # del curso (decision D-09).
     "mu_n": 1200.0,             # cm2/(V*s)  movilidad de electrones en la base
     "mu_p": 60.0,               # cm2/(V*s)  movilidad de huecos en el emisor
+
+    # Variacion de fabricacion entre sectores. Es UN solo control compartido por
+    # todas las pestañas: la celda es una sola, y si cada pestaña tuviera el suyo
+    # estarian describiendo celdas distintas (ver D-28).
+    #
+    # Por defecto va en cero porque la Tabla A.1 del Anexo A define una celda
+    # homogenea: esa es la celda que el enunciado asigna y la que deben describir
+    # las cifras reportadas. La dispersion es una adicion propia declarada, y vive
+    # detras de un control explicito.
+    "dispersion_sectores": 0.0,  # desviacion logaritmica entre sectores
 }
 
 # ---------------------------------------------------------------------------
@@ -103,6 +113,7 @@ RANGOS = {
     "ancho_dedo_um": (20.0, 300.0),
     "mu_n": (200.0, 1500.0),
     "mu_p": (20.0, 500.0),
+    "dispersion_sectores": (0.0, 0.6),
 }
 
 # El enunciado fija 15-75 C para los controles de la Pestaña 3 y para la

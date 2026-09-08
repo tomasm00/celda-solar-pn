@@ -368,3 +368,87 @@ Se mantiene V4 como la exige el enunciado y se añade **C-T5**, que evalúa con 
 **18 verificaciones, 0 fallas reales.** Las siete del enunciado aprueban.
 
 Valores actualizados de la celda de la semilla: Jsc **14,5526 mA/cm²**, Voc **0,587100 V**, factor de forma **0,769274**, eficiencia **6,5726 %**, coeficiente térmico **−2,209 mV/°C**.
+
+---
+
+# Correcciones tras la revisión del profesor · 8 de septiembre de 2026
+
+## D-28 · La celda es una sola, no sesenta y cuatro celdas separadas — [BUG CORREGIDO]
+
+**Qué señaló el profesor.** La eficiencia cuántica no se puede calcular como si la celda
+fuera muchas celdas independientes. Es un solo dispositivo con respuesta distinta en
+distintos sectores.
+
+**Qué pasaba.** Tres pestañas montaban su propia celda:
+
+- La Pestaña 2 mostraba arriba la curva de una celda **homogénea nominal** y abajo un mapa
+  de 64 sectores. Cuando la dispersión no era cero, la curva y el mapa describían
+  dispositivos distintos.
+- La Pestaña 3 tomaba su fotocorriente de esa misma celda homogénea, ignorando la dispersión.
+- Las Pestañas 2 y 4 tenían **cada una su propio deslizador de dispersión**, con valores por
+  defecto distintos (0,20 y 0,00). Podían quedar en valores distintos y nadie lo notaba.
+
+La verificación C-T6 comprobaba la coherencia solo con la celda homogénea, que es justo el
+único caso donde las tres coinciden por construcción. El agujero era invisible.
+
+**La física.** Bajo iluminación uniforme todos los sectores reciben el mismo flujo por unidad
+de área, y la eficiencia cuántica es **lineal** en la probabilidad de colección. Por lo tanto
+
+    promedio por área de las EQE locales  ≡  EQE calculada con la colección promedio
+
+No es una aproximación: es una identidad exacta. Verificada a **8,9×10⁻¹⁶**.
+
+**Corrección.** Un único control de dispersión, en la barra lateral, compartido por toda la
+aplicación. La respuesta de la celda se calcula con la colección promediada por área sobre
+sus sectores (`coleccion_de_celda`), y las Pestañas 2, 3 y 4 la usan sin excepción. El mapa
+se calcula desde las mismas colecciones locales que produjeron esa curva, de modo que no
+pueden desincronizarse.
+
+**Valor por defecto de la dispersión: cero.** La Tabla A.1 del Anexo A define una celda
+homogénea; ésa es la celda que el enunciado asigna y la que describen las cifras reportadas.
+La dispersión es una adición propia y vive detrás de un control explícito. Con esto ninguna
+cifra publicada cambia.
+
+**Verificaciones nuevas.** **C-T7** comprueba la identidad con dispersión 0,30, donde sí mide
+algo. **C-T8** comprueba que las Pestañas 2, 3 y 4 siguen coincidiendo con dispersión
+distinta de cero, que es exactamente lo que C-T6 no podía ver.
+
+---
+
+## D-29 · El mapa de generación medía la cosa equivocada — [BUG CORREGIDO]
+
+**Qué señaló el profesor.** El mapa de calor de la Pestaña 1 no parecía representar un caso
+real.
+
+**Qué pasaba.** Dibujaba la generación absoluta en escala logarítmica con un piso fijo seis
+décadas por debajo del máximo global. Pero la generación abarca **más de trescientas
+décadas**: el azul cae a cero a pocas micras mientras el infrarrojo se mantiene casi plano.
+
+Medido sobre el modelo: **el 26,4 % del mapa quedaba contra el piso**, y **46 de 1001 colores
+salían enteros planos**, pintados de un color uniforme que se lee como «aquí no se genera
+nada». Es falso: a 1100 nm sí se generan pares, de forma casi constante en toda la
+profundidad. El mapa no estaba mal dibujado, estaba midiendo la cantidad equivocada.
+
+**Corrección.** Se dibuja la **fracción de los pares de cada color ya creados por encima de
+cada profundidad**, normalizada color a color. Es una cantidad acotada entre cero y uno, así
+que no necesita escala logarítmica ni piso arbitrario, y cada color usa todo el rango de la
+paleta. Se añade el contorno del 50 %, que es el frente de absorción. Resultado: **0 colores
+planos**, y el frente aparece como una curva limpia que barre de 0,07 µm a 400 nm hasta
+43 µm a 1000 nm.
+
+---
+
+## D-30 · Relieve tridimensional del origen de la corriente — [FIGURA NUEVA]
+
+Superficie que dibuja la generación **multiplicada por la probabilidad de colección**: no
+dónde nacen los pares, sino de dónde sale la corriente que la celda entrega. Su integral
+sobre toda la superficie es la corriente fotogenerada.
+
+Dos detalles de construcción, ambos por la misma razón que D-29:
+
+- El eje de profundidad es logarítmico, así que se dibuja la densidad **ponderada por la
+  profundidad**. Sin esa ponderación la superficie es un pico en el ultravioleta y una
+  llanura en todo lo demás. La ponderación baja la superficie plana del 92,6 % al 54,7 %.
+- Se usan **dos canales**, porque son dos preguntas distintas: la altura, normalizada color a
+  color, dice *dónde* nace la corriente de ese color; el color de la superficie dice *cuánto*
+  aporta ese color al total.

@@ -108,10 +108,17 @@ def render():
         s.d_n_um, s.W_p_um, s.NA, s.ND, s.T_c, s.reflector_trasero,
         s.irradiancia_soles, s.mu_p, s.tau_p_us, s.mu_n, s.tau_n_us, s.S_f, s.S_r)
 
-    dispersion = st.slider(
-        "Dispersión de fabricación entre sectores", 0.0, 0.6, 0.0, 0.05,
-        help="En cero la celda es perfectamente homogénea, que es el caso de "
-             "referencia limpio para aislar el efecto de los defectos.")
+    # La dispersion es un unico control compartido, en la barra lateral: esta
+    # pestaña y la Pestaña 2 tienen que describir la misma celda (ver D-28).
+    dispersion = s.dispersion_sectores
+    if dispersion > 0:
+        st.caption(
+            f"Dispersión entre sectores **{dispersion:.2f}**, fijada en la barra "
+            f"lateral. Es la misma celda que retrata el mapa de la Pestaña 2.")
+    else:
+        st.caption(
+            "Celda homogénea. Súbase la dispersión en la barra lateral para añadir "
+            "variación de fabricación sobre la que actúan los defectos.")
 
     defectos = _controles_defectos()
 

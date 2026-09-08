@@ -158,6 +158,58 @@ def transporte_de_sector(tr: Transporte, tau_n_s, s_f):
     )
 
 
+def coleccion_de_celda(campo, union, W_cm, tr, sectores):
+    """
+    Probabilidad de colección de LA celda, que es una sola, no sesenta y cuatro.
+
+    La celda no es un conjunto de celdas independientes: es un único dispositivo
+    cuya respuesta varía de un punto a otro. Bajo iluminación uniforme, todos los
+    sectores reciben el mismo flujo por unidad de área, y la eficiencia cuántica
+    es **lineal** en la probabilidad de colección:
+
+        EQE(λ) = (1/Nph) · ∫ G(x,λ) · f_c(x) dx
+
+    Por lo tanto el promedio por área de las eficiencias locales es idéntico a la
+    eficiencia calculada con la probabilidad de colección promedio. No es una
+    aproximación: es una identidad exacta, y la verificación C-T7 la comprueba.
+
+    De ahí que la forma correcta de obtener la respuesta de la celda sea promediar
+    la colección sobre los sectores y calcular una sola curva con ella, en lugar de
+    calcular una curva por sector y tratarlas como dispositivos separados.
+
+    Devuelve la colección promedio de la celda y la pila de las locales, que es lo
+    que necesitan los mapas.
+    """
+    n = sectores.n
+    locales = np.empty((n * n, len(campo.x_cm)))
+    k = 0
+    for i in range(n):
+        for j in range(n):
+            tr_local = transporte_de_sector(tr, sectores.tau_n_s[i, j],
+                                            sectores.s_f[i, j])
+            locales[k] = probabilidad_coleccion(campo.x_cm, union, W_cm, tr_local)
+            k += 1
+    # Todos los sectores tienen la misma área, así que el promedio por área es la
+    # media aritmética. Si algún día dejan de tenerla, aquí va el peso.
+    return locales.mean(axis=0), locales.reshape(n, n, -1)
+
+
+def mapa_iqe_desde_locales(campo, fc_locales, indice_lambda):
+    """
+    Mapa de eficiencia interna local a un color, desde colecciones ya resueltas.
+
+    Reutiliza la pila que devolvió `coleccion_de_celda` en vez de volver a resolver
+    los sectores. Además de ser mucho más barato, garantiza que el mapa y la curva
+    de la celda salgan exactamente de los mismos sectores: si se recalculan por
+    separado, nada obliga a que coincidan.
+    """
+    g = campo.G[:, indice_lambda]
+    eqe_local = np.trapezoid(g * np.asarray(fc_locales), campo.x_cm, axis=-1)
+    eqe_local = eqe_local / campo.Nph[indice_lambda]
+    denominador = max(1.0 - float(campo.R[indice_lambda]), 1e-9)
+    return eqe_local / denominador
+
+
 def mapa_iqe_local(campo, union, W_cm, tr, sectores, indice_lambda):
     """
     Eficiencia cuántica interna local, sector por sector, a un color dado.

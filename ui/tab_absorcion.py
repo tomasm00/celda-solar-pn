@@ -234,6 +234,26 @@ def render():
         optics_plots.mapa_generacion(campo.x_cm, campo.lambda_nm, campo.G,
                                      s.d_n_um, W_um),
         use_container_width=True)
+    st.caption(
+        "Cada color está normalizado contra sí mismo, así que la escala no mezcla "
+        "«cuánta luz hay de este color» con «hasta dónde llega». La línea ámbar es el "
+        "frente de absorción: dónde cada color ya entregó la mitad de sus pares. Su "
+        "forma recorre casi cinco órdenes de magnitud entre el ultravioleta y el "
+        "infrarrojo, y por eso la grilla de profundidad no puede ser uniforme."
+    )
+
+    st.plotly_chart(
+        optics_plots.relieve_generacion_3d(campo.x_cm, campo.lambda_nm, campo.G, fc,
+                                           s.d_n_um, W_um),
+        use_container_width=True)
+    st.caption(
+        "El relieve es la generación **multiplicada por la probabilidad de colección**: "
+        "no dónde nacen los pares, sino de dónde sale la corriente que la celda entrega. "
+        "Se puede girar con el ratón. El valle pegado a la superficie frontal es "
+        "recombinación superficial devorando el azul; la cola que se apaga hacia el "
+        "fondo del infrarrojo es absorción incompleta. Integrando toda la superficie se "
+        "recupera exactamente la corriente fotogenerada."
+    )
 
     st.divider()
 

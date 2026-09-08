@@ -9,12 +9,13 @@ from physics.material import juntura as resolver_juntura
 from physics.optics import campo_optico
 from physics.quantum_efficiency import (
     cota_superior,
+    coleccion_de_celda,
     iqe_referida_a_absorcion,
     corriente_de_cortocircuito,
     curvas_por_tiempo_de_vida,
     eficiencia_cuantica,
     generar_sectores,
-    mapa_iqe_local,
+    mapa_iqe_desde_locales,
 )
 from units import celsius_a_kelvin, cm_a_um, um_a_cm
 from visualization import qe_plots
@@ -25,7 +26,16 @@ TAUS_COMPARACION_US = (1.0, 10.0, 100.0, 1000.0)
 
 @st.cache_data(show_spinner=False, max_entries=6)
 def _resolver(d_n_um, W_p_um, na, nd, t_c, reflector, irradiancia,
-              mu_p, tau_p_us, mu_n, tau_n_us, s_f, s_r):
+              mu_p, tau_p_us, mu_n, tau_n_us, s_f, s_r, dispersion):
+    """
+    Resuelve LA celda, que es una sola.
+
+    La respuesta de la celda no es la de un dispositivo nominal homogeneo por un
+    lado y sesenta y cuatro dispositivos sueltos por otro. Es una sola curva: la
+    que sale de la coleccion promediada por area sobre sus sectores. Con
+    dispersion cero todos los sectores son identicos y esto se reduce
+    exactamente al caso homogeneo.
+    """
     d_n, W_p = um_a_cm(d_n_um), um_a_cm(W_p_um)
     t_k = celsius_a_kelvin(t_c)
     W = d_n + W_p
@@ -33,16 +43,10 @@ def _resolver(d_n_um, W_p_um, na, nd, t_c, reflector, irradiancia,
     campo = campo_optico(d_n, W_p, reflector, irradiancia,
                          np.linspace(union.x_n, union.x_p, NODOS_EN_DEPLEXION))
     tr = armar_transporte(mu_p, tau_p_us * 1e-6, mu_n, tau_n_us * 1e-6, s_f, s_r, t_k)
-    fc = probabilidad_coleccion(campo.x_cm, union, W, tr)
-    eqe, iqe = eficiencia_cuantica(campo, fc)
-    return campo, union, tr, W, eqe, iqe
-
-
-@st.cache_data(show_spinner=False, max_entries=24)
-def _mapa(_campo, _union, W, _tr, huella, tau_n_us, s_f, dispersion,
-          i_lambda, n_sectores):
-    sectores = generar_sectores(n_sectores, tau_n_us * 1e-6, s_f, dispersion)
-    return sectores, mapa_iqe_local(_campo, _union, W, _tr, sectores, i_lambda)
+    sectores = generar_sectores(config.N_SECTORES, tau_n_us * 1e-6, s_f, dispersion)
+    fc_celda, fc_locales = coleccion_de_celda(campo, union, W, tr, sectores)
+    eqe, iqe = eficiencia_cuantica(campo, fc_celda)
+    return campo, union, tr, W, eqe, iqe, sectores, fc_locales
 
 
 @st.cache_data(show_spinner=False, max_entries=12)
@@ -60,9 +64,10 @@ def render():
         "combina dónde nacen los pares con cuántos sobreviven hasta la juntura."
     )
 
-    campo, union, tr, W, eqe, iqe = _resolver(
+    campo, union, tr, W, eqe, iqe, sectores, fc_locales = _resolver(
         s.d_n_um, s.W_p_um, s.NA, s.ND, s.T_c, s.reflector_trasero,
-        s.irradiancia_soles, s.mu_p, s.tau_p_us, s.mu_n, s.tau_n_us, s.S_f, s.S_r)
+        s.irradiancia_soles, s.mu_p, s.tau_p_us, s.mu_n, s.tau_n_us, s.S_f, s.S_r,
+        s.dispersion_sectores)
 
     huella = (s.d_n_um, s.W_p_um, s.NA, s.ND, s.T_c, s.reflector_trasero,
               s.irradiancia_soles, s.mu_p, s.tau_p_us, s.mu_n, s.S_r)
@@ -121,36 +126,44 @@ def render():
 
     st.divider()
 
-    st.markdown("#### La celda por sectores")
+    st.markdown("#### Una celda con respuesta que varía de un punto a otro")
     st.write(
         "Una oblea real no es homogénea: el tiempo de vida y la pasivación varían de un "
-        "punto a otro por el proceso de fabricación. Cada sector se resuelve con su "
-        "propio tiempo de vida local y su propia recombinación superficial local."
+        "punto a otro por el proceso de fabricación. **Eso no la convierte en muchas "
+        "celdas separadas.** Sigue siendo un solo dispositivo, con una sola curva de "
+        "eficiencia cuántica, que es la que aparece arriba."
     )
 
-    ctrl1, ctrl2 = st.columns([2, 3])
-    with ctrl1:
-        dispersion = st.slider(
-            "Dispersión de fabricación", 0.0, 0.6, 0.20, 0.05,
-            help="Desviación logarítmica de la variación entre sectores. En cero, la "
-                 "celda queda perfectamente homogénea.",
-        )
-    with ctrl2:
-        lam_mapa = st.slider(
-            "Color con el que se mide el mapa  [nm]",
-            *config.RANGOS["lambda_nm"], value=float(s.lambda_nm), step=10.0,
-            help="En el azul el mapa retrata la superficie frontal; en el rojo, el "
-                 "volumen de la base.",
-        )
+    lam_mapa = st.slider(
+        "Color con el que se mide el mapa  [nm]",
+        *config.RANGOS["lambda_nm"], value=float(s.lambda_nm), step=10.0,
+        help="En el azul el mapa retrata la superficie frontal; en el rojo, el "
+             "volumen de la base.",
+    )
+    st.caption(
+        f"La dispersión entre sectores se controla en la barra lateral y vale "
+        f"**{s.dispersion_sectores:.2f}**. Es un único control para toda la aplicación: "
+        f"la Pestaña 4 describe esta misma celda."
+    )
 
     i_mapa = int(np.argmin(np.abs(campo.lambda_nm - lam_mapa)))
-    sectores, mapa = _mapa(campo, union, W, tr, huella, s.tau_n_us, s.S_f,
-                           dispersion, i_mapa, config.N_SECTORES)
+    mapa = mapa_iqe_desde_locales(campo, fc_locales, i_mapa)
 
-    m1, m2, m3 = st.columns(3)
+    # La eficiencia de la celda a este color tiene que ser el promedio por area del
+    # mapa. No es una coincidencia ni una aproximacion: la eficiencia cuantica es
+    # lineal en la probabilidad de coleccion, asi que promediar las respuestas
+    # locales y calcular una sola respuesta con la coleccion promedio dan lo mismo.
+    iqe_celda_aqui = float(iqe[i_mapa])
+    m1, m2, m3, m4 = st.columns(4)
     m1.metric("IQE local mínima", f"{100 * mapa.min():.1f} %")
-    m2.metric("IQE local media", f"{100 * mapa.mean():.1f} %")
-    m3.metric("IQE local máxima", f"{100 * mapa.max():.1f} %")
+    m2.metric("IQE local máxima", f"{100 * mapa.max():.1f} %")
+    m3.metric("Promedio del mapa", f"{100 * mapa.mean():.2f} %")
+    m4.metric("IQE de la celda", f"{100 * iqe_celda_aqui:.2f} %",
+              delta=f"{100 * (mapa.mean() - iqe_celda_aqui):+.4f} pp",
+              delta_color="off",
+              help="Tiene que coincidir con el promedio del mapa. Es la verificación "
+                   "C-T7, y se cumple de forma exacta porque la eficiencia cuántica es "
+                   "lineal en la probabilidad de colección.")
 
     v1, v2 = st.columns(2, gap="large")
     with v1:
@@ -165,8 +178,9 @@ def render():
     st.caption(
         "El barrido imita un mapeo por haz de luz inducido: la sonda recorre la celda "
         "sector por sector y va revelando el mapa a medida que mide, igual que el "
-        "instrumento real. Cada valor que aparece es el cálculo completo de ese sector, "
-        "con su propio tiempo de vida y su propia pasivación."
+        "instrumento real. Lo que mide un mapeo así es precisamente **la respuesta local "
+        "de un mismo dispositivo**, no la de dispositivos distintos: al promediarlo sobre "
+        "el área se recupera exactamente la curva de la celda."
     )
 
     st.plotly_chart(qe_plots.histograma_sectores(mapa, campo.lambda_nm[i_mapa]),

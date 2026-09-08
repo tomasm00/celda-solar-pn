@@ -3,13 +3,15 @@
 import numpy as np
 import streamlit as st
 
+import config
 import constants as C
 from physics.collection import probabilidad_coleccion, transporte as armar_transporte
 from physics.diode import corriente_saturacion, curva_iv, factor_de_forma_ideal
 from physics.front_grid import barrido_numero_de_dedos, malla
 from physics.material import bandgap, juntura as resolver_juntura
 from physics.optics import campo_optico
-from physics.quantum_efficiency import corriente_de_cortocircuito, eficiencia_cuantica
+from physics.quantum_efficiency import (coleccion_de_celda, corriente_de_cortocircuito,
+                                        eficiencia_cuantica, generar_sectores)
 from units import celsius_a_kelvin, cm_a_um, um_a_cm
 from visualization import iv_plots
 
@@ -18,13 +20,18 @@ NODOS_EN_DEPLEXION = 12
 
 @st.cache_data(show_spinner=False, max_entries=6)
 def _fotocorriente(d_n_um, W_p_um, na, nd, t_c, reflector, irradiancia,
-                   mu_p, tau_p_us, mu_n, tau_n_us, s_f, s_r):
+                   mu_p, tau_p_us, mu_n, tau_n_us, s_f, s_r, dispersion):
     """
     Corriente fotogenerada y corriente de saturación, desde la cadena completa.
 
     La fotocorriente no es un parámetro libre: sale de integrar la eficiencia
     cuántica sobre el espectro, que a su vez sale de la generación y la colección
     de las Pestañas 1 y 2. Es lo que la verificación V3 exige.
+
+    La colección es la de LA celda, promediada por área sobre sus sectores, que es
+    la misma que usa la Pestaña 2. Si aquí se usara la celda homogénea nominal y
+    allá la celda con dispersión, las dos pestañas estarían describiendo
+    dispositivos distintos (ver D-28).
     """
     d_n, W_p = um_a_cm(d_n_um), um_a_cm(W_p_um)
     t_k = celsius_a_kelvin(t_c)
@@ -32,7 +39,8 @@ def _fotocorriente(d_n_um, W_p_um, na, nd, t_c, reflector, irradiancia,
     campo = campo_optico(d_n, W_p, reflector, irradiancia,
                          np.linspace(union.x_n, union.x_p, NODOS_EN_DEPLEXION))
     tr = armar_transporte(mu_p, tau_p_us * 1e-6, mu_n, tau_n_us * 1e-6, s_f, s_r, t_k)
-    fc = probabilidad_coleccion(campo.x_cm, union, d_n + W_p, tr)
+    sectores = generar_sectores(config.N_SECTORES, tau_n_us * 1e-6, s_f, dispersion)
+    fc, _ = coleccion_de_celda(campo, union, d_n + W_p, tr, sectores)
     eqe, _ = eficiencia_cuantica(campo, fc)
     j_l = corriente_de_cortocircuito(campo, eqe)
     j0, termino_base, termino_emisor = corriente_saturacion(
@@ -82,7 +90,8 @@ def render():
 
     j_l_desnuda, j0, t_base, t_emisor, tr, t_k = _fotocorriente(
         s.d_n_um, s.W_p_um, s.NA, s.ND, s.T_c, s.reflector_trasero,
-        s.irradiancia_soles, s.mu_p, s.tau_p_us, s.mu_n, s.tau_n_us, s.S_f, s.S_r)
+        s.irradiancia_soles, s.mu_p, s.tau_p_us, s.mu_n, s.tau_n_us, s.S_f, s.S_r,
+        s.dispersion_sectores)
 
     grid = malla(s.n_dedos, s.ancho_dedo_um * 1e-4)
     j_l = j_l_desnuda * (1.0 - grid.fraccion_sombra)
