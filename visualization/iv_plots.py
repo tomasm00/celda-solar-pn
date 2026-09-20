@@ -2,8 +2,11 @@
 
 import numpy as np
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-from visualization.optics_plots import ACENTO, BASE, EMISOR, REJILLA, SUAVE, TINTA, _base, _titulo
+from visualization.figura_animada import FiguraAnimada
+from visualization.optics_plots import (ACENTO, BASE, EMISOR, REJILLA, SUAVE, TINTA, _base,
+                                        _coma, _titulo)
 
 COLOR_J = "#E5A33F"
 COLOR_P = "#5FC49B"
@@ -21,7 +24,7 @@ def _ejes_iv(fig, j_max, p_max):
     return fig
 
 
-def curva_iv(curva, curva_ideal=None, mostrar_potencia=True):
+def curva_iv(curva, curva_ideal=None, mostrar_potencia=True, danada=None):
     """
     Curva corriente-voltaje con la de potencia superpuesta y el punto de máxima
     potencia marcado.
@@ -78,6 +81,13 @@ def curva_iv(curva, curva_ideal=None, mostrar_potencia=True):
         legend=dict(orientation="h", y=-0.26, x=0, font=dict(size=10.5)),
         margin=dict(r=62),
     )
+    if danada is not None:
+        v_d, j_d, etiqueta = danada
+        fig.add_trace(go.Scatter(
+            x=v_d, y=1e3 * np.asarray(j_d), mode="lines", name=etiqueta,
+            line=dict(color="#E4664A", width=2, dash="dash"),
+            hovertemplate="V = %{x:.3f} V<br>J = %{y:.2f} mA/cm²<extra></extra>"))
+
     return _base(_ejes_iv(fig, 1e3 * curva.j_sc, 1e3 * curva.p_max),
                  alto=440, margen_superior=62)
 
@@ -159,54 +169,6 @@ def barrido_animado(curva):
                  alto=460, margen_superior=78)
 
 
-def compromiso_malla(n_dedos, sombras, resistencias, eficiencias, n_actual):
-    """
-    El compromiso de la malla frontal: sombra contra resistencia.
-
-    Al agregar dedos la resistencia serie cae —la del emisor como el inverso del
-    cuadrado del número, la de los dedos como su inverso— pero el sombreado crece
-    proporcionalmente. La eficiencia tiene por eso un máximo.
-    """
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=n_dedos, y=100 * np.array(sombras), mode="lines", name="Sombreado",
-        line=dict(color=SUAVE, width=2),
-        hovertemplate="%{x} dedos<br>tapan el %{y:.2f} % del área<extra></extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        x=n_dedos, y=resistencias, mode="lines", name="Resistencia serie",
-        line=dict(color=EMISOR, width=2), yaxis="y2",
-        hovertemplate="%{x} dedos<br>Rs = %{y:.3f} Ω·cm²<extra></extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        x=n_dedos, y=100 * np.array(eficiencias), mode="lines", name="Eficiencia",
-        line=dict(color=ACENTO, width=3), yaxis="y3",
-        hovertemplate="%{x} dedos<br>η = %{y:.3f} %<extra></extra>",
-    ))
-
-    k = int(np.argmax(eficiencias))
-    fig.add_vline(x=n_dedos[k], line=dict(color=ACENTO, width=1.5, dash="dash"))
-    fig.add_annotation(x=n_dedos[k], y=1.0, yref="paper",
-                       text=f"óptimo · {n_dedos[k]} dedos", showarrow=False,
-                       font=dict(color=ACENTO, size=11), xanchor="left",
-                       yanchor="bottom", xshift=4)
-    fig.add_vline(x=n_actual, line=dict(color=TINTA, width=1.4, dash="dot"))
-
-    fig.update_xaxes(title="Número de dedos de plata")
-    fig.update_yaxes(title="Área sombreada  [%]")
-    fig.update_layout(
-        yaxis2=dict(title="Rs  [Ω·cm²]", overlaying="y", side="right",
-                    gridcolor="rgba(0,0,0,0)", title_standoff=8),
-        yaxis3=dict(overlaying="y", side="right", position=1.0, showgrid=False,
-                    showticklabels=False),
-        title=_titulo("El compromiso de la malla frontal",
-                      "más dedos extraen mejor la corriente pero tapan más luz"),
-        legend=dict(orientation="h", y=-0.26, x=0, font=dict(size=10.5)),
-        margin=dict(r=62),
-    )
-    return _base(fig, alto=420, margen_superior=62)
-
-
 def efecto_resistencia_serie(curvas_por_rs):
     """
     Familia de curvas para distintas resistencias serie.
@@ -234,3 +196,128 @@ def efecto_resistencia_serie(curvas_por_rs):
         legend=dict(orientation="v", y=0.95, x=0.02, font=dict(size=10.5)),
     )
     return _base(fig, alto=400, margen_superior=58)
+
+
+def construccion_de_la_curva(curva, j0, j_l, rs, rp, vt_n, cuadros=56):
+    """
+    Cómo se resuelve la curva: una raíz por cada voltaje.
+
+    A la izquierda, para el voltaje del cuadro, la función que el programa anula.
+    Cruza el cero una sola vez, porque crece con la corriente sin volver atrás, y
+    ese cruce es la corriente que la celda entrega a ese voltaje. La cruz marca lo
+    que daría la forma explícita, la que ignora que la juntura ve un voltaje menor
+    por la caída en la resistencia serie: a voltaje bajo coincide, y cerca del punto
+    de máxima potencia se separa. A la derecha, la curva que se va armando con las
+    raíces ya encontradas.
+    """
+    j_tope = 1e3 * curva.j_sc * 1.18
+    js = np.linspace(0.0, j_tope, 160)                      # mA/cm2
+
+    def residuo(v, j_ma):
+        j = j_ma * 1e-3
+        v_j = v + rs * j
+        expo = np.clip(v_j / vt_n, -600.0, 600.0)
+        return 1e3 * (j_l - j0 * (np.exp(expo) - 1.0) - v_j / rp - j)
+
+    def ingenua(v):
+        expo = np.clip(v / vt_n, -600.0, 600.0)
+        return 1e3 * (j_l - j0 * (np.exp(expo) - 1.0) - v / rp)
+
+    indices = np.unique(np.linspace(0, len(curva.v) - 1, cuadros).astype(int))
+    k_mpp = int(np.argmin(np.abs(curva.v - curva.v_mpp)))
+    inicial = int(np.argmin(np.abs(indices - k_mpp)))
+
+    def narracion(k):
+        v, j = float(curva.v[k]), float(curva.j[k])
+        v_j = v + rs * j
+        j_d = 1e3 * j0 * (np.exp(np.clip(v_j / vt_n, -600, 600)) - 1.0)
+        j_p = 1e3 * v_j / rp
+        j_n = ingenua(v)
+        exceso = 100.0 * (j_n / (1e3 * j) - 1.0) if j > 1e-9 else 0.0
+        return (f"<b>V = {_coma(v, 3)} V</b> · la juntura ve {_coma(v_j, 3)} V, "
+                f"{_coma(1e3 * (v_j - v), 1)} mV más que los terminales<br>"
+                f"entrega {_coma(1e3 * j, 2)} mA/cm² · el diodo se lleva {_coma(j_d, 2)} y la "
+                f"resistencia paralela {_coma(j_p, 3)}<br>"
+                f"la forma explícita daría {_coma(j_n, 2)} mA/cm², un {_coma(exceso, 1)} % de más")
+
+    def caja(k):
+        return dict(x=0.0, y=1.16, xref="paper", yref="paper", xanchor="left", yanchor="bottom",
+                    align="left", showarrow=False, bgcolor="rgba(19,27,38,0.92)",
+                    bordercolor=REJILLA, borderpad=7, text=narracion(k),
+                    font=dict(color=TINTA, size=12.5))
+
+    fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5], horizontal_spacing=0.1,
+                        subplot_titles=["La función que se anula, a ese voltaje",
+                                        "La curva que se va armando"])
+    titulos = [a.to_plotly_json() for a in fig.layout.annotations]
+    for a in titulos:
+        a["font"] = dict(size=12.5, color=TINTA)
+        a["y"] = 1.0
+
+    k0 = int(indices[inicial])
+    fig.add_trace(go.Scatter(x=js, y=residuo(curva.v[k0], js), mode="lines", name="residuo",
+                             line=dict(color=COLOR_IDEAL, width=2), showlegend=False,
+                             hovertemplate="si la corriente fuera %{x:.2f} mA/cm²<br>"
+                                           "faltaría %{y:.2f}<extra></extra>"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=[1e3 * curva.j[k0]], y=[0.0], mode="markers", name="raíz",
+                             marker=dict(size=12, color=COLOR_J, line=dict(color="#FFFFFF", width=1.5)),
+                             showlegend=False, hoverinfo="skip"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=[ingenua(curva.v[k0])], y=[0.0], mode="markers", name="explícita",
+                             marker=dict(size=11, color=COLOR_IDEAL, symbol="x", line=dict(width=1)),
+                             showlegend=False, hoverinfo="skip"), row=1, col=1)
+    fig.add_hline(y=0, line=dict(color=REJILLA, width=1.2), row=1, col=1)
+
+    fig.add_trace(go.Scatter(x=curva.v[:k0 + 1], y=1e3 * curva.j[:k0 + 1], mode="lines",
+                             name="curva", line=dict(color=COLOR_J, width=2.6), showlegend=False,
+                             hovertemplate="V = %{x:.3f} V<br>J = %{y:.2f} mA/cm²<extra></extra>"),
+                  row=1, col=2)
+    fig.add_trace(go.Scatter(x=[curva.v[k0]], y=[1e3 * curva.j[k0]], mode="markers", showlegend=False,
+                             marker=dict(size=11, color=COLOR_J, line=dict(color="#FFFFFF", width=1.5)),
+                             hoverinfo="skip"), row=1, col=2)
+    fig.add_trace(go.Scatter(x=curva.v, y=[ingenua(v) for v in curva.v], mode="lines",
+                             name="forma explícita", line=dict(color=COLOR_IDEAL, width=1.4, dash="dot"),
+                             showlegend=False, hoverinfo="skip"), row=1, col=2)
+
+    fig.update_xaxes(title="Corriente que se prueba  [mA/cm²]", range=[0, j_tope], row=1, col=1)
+    fig.update_yaxes(title="Lo que falta para cerrar la ecuación", row=1, col=1)
+    fig.update_xaxes(title="Voltaje V  [V]", range=[0, float(curva.v_oc) * 1.02], row=1, col=2)
+    fig.update_yaxes(title="Densidad de corriente  [mA/cm²]", range=[0, j_tope], row=1, col=2)
+    fig.update_xaxes(gridcolor=REJILLA, zerolinecolor=REJILLA)
+    fig.update_yaxes(gridcolor=REJILLA, zerolinecolor=REJILLA)
+
+    marcos = []
+    for m, k in enumerate(indices):
+        k = int(k)
+        marcos.append(dict(
+            name=str(m),
+            data=[dict(type="scatter", x=list(js), y=list(residuo(curva.v[k], js))),
+                  dict(type="scatter", x=[1e3 * float(curva.j[k])], y=[0.0]),
+                  dict(type="scatter", x=[float(ingenua(curva.v[k]))], y=[0.0]),
+                  dict(type="scatter", x=list(curva.v[:k + 1]), y=list(1e3 * curva.j[:k + 1])),
+                  dict(type="scatter", x=[float(curva.v[k])], y=[1e3 * float(curva.j[k])])],
+            traces=[0, 1, 2, 3, 4],
+            layout=dict(annotations=titulos + [caja(k)])))
+
+    pasos = [dict(label=(_coma(curva.v[int(k)], 1) if m % 8 == 0 else ""), method="animate",
+                  args=[[str(m)], dict(mode="immediate", frame=dict(duration=0, redraw=True))])
+             for m, k in enumerate(indices)]
+
+    fig.update_layout(
+        annotations=titulos + [caja(k0)],
+        height=560, margin=dict(l=14, r=18, t=150, b=100),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color=TINTA, size=12),
+        updatemenus=[dict(
+            type="buttons", showactive=False, direction="left", x=0.0, y=-0.2, xanchor="left",
+            yanchor="top", bgcolor="#1C2531", bordercolor=REJILLA, font=dict(color=TINTA, size=12),
+            buttons=[dict(label="▶  Recorrer el barrido", method="animate",
+                          args=[None, dict(frame=dict(duration=200, redraw=True), fromcurrent=True,
+                                           transition=dict(duration=0), mode="immediate")]),
+                     dict(label="⏸", method="animate",
+                          args=[[None], dict(frame=dict(duration=0, redraw=False), mode="immediate")])])],
+        sliders=[dict(active=inicial, x=0.3, y=-0.18, len=0.7, xanchor="left", yanchor="top",
+                      pad=dict(t=0, b=0), currentvalue=dict(visible=False),
+                      font=dict(color=SUAVE, size=10), bgcolor="#1C2531", activebgcolor=ACENTO,
+                      bordercolor=REJILLA, tickcolor=REJILLA, steps=pasos)])
+    datos = fig.to_dict()
+    return FiguraAnimada(data=datos["data"], layout=datos["layout"], cuadros=marcos)

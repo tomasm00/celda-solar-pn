@@ -3,11 +3,11 @@ Propiedades del material y geometría eléctrica de la juntura.
 
 Este módulo no sabe nada de luz: resuelve lo que el dopaje y la temperatura
 determinan por sí solos. De aquí salen las difusividades, las longitudes de
-difusión, el potencial de contacto y el ancho de la zona de deplexión.
+difusión, el potencial de contacto y el ancho de la zona de depleción.
 
 Cadena (U2, láminas 20 a 23 y 30):
     dopaje + temperatura -> concentración intrínseca -> potencial de contacto
-                         -> ancho de la zona de deplexión
+                         -> ancho de la zona de depleción
     movilidad + temperatura -> difusividad (Einstein) -> longitud de difusión
 """
 
@@ -82,9 +82,9 @@ def potencial_contacto(na, nd, t_k):
     return voltaje_termico(t_k) * np.log(na * nd / ni ** 2)
 
 
-def ancho_deplexion(na, nd, t_k):
+def ancho_deplecion(na, nd, t_k):
     """
-    Ancho total de la zona de deplexión, en cm.
+    Ancho total de la zona de depleción, en cm.
 
     Se obtiene resolviendo las expresiones de campo y potencial de la lámina 21
     de la U2 con dos condiciones: la carga total de la zona es neutra, y el
@@ -108,7 +108,7 @@ class Juntura:
     """Geometría eléctrica de la celda, toda en cm."""
 
     x_j: float          # posición de la juntura = espesor del emisor
-    W_dep: float        # ancho total de la zona de deplexión
+    W_dep: float        # ancho total de la zona de depleción
     x_n: float          # borde de la zona en el lado n
     x_p: float          # borde de la zona en el lado p
     psi0: float         # potencial de contacto, en volt
@@ -137,20 +137,20 @@ def juntura(d_n_cm, na, nd, t_k, reparto="simetrico"):
     """
     Resuelve la geometría de la juntura.
 
-    DECISION D-02: el enunciado reparte la zona de deplexión simétricamente a
+    DECISION D-02: el enunciado reparte la zona de depleción simétricamente a
     ambos lados. Físicamente el reparto correcto es el que respeta la neutralidad
     de carga, que la manda casi entera al lado menos dopado. Se ofrecen ambos y
     el enunciado es el que manda por defecto.
 
     Con el reparto simétrico hay combinaciones de dopaje y espesor de emisor en
-    las que el borde del lado n **cae fuera de la celda**: la zona de deplexión
+    las que el borde del lado n **cae fuera de la celda**: la zona de depleción
     llega a medir más que el emisor. Eso no es una celda; es una geometría que el
     modelo no puede representar. Antes se aceptaba en silencio y la colección
     salía valiendo 1 en la superficie frontal, ocultando por completo el efecto de
     la recombinación superficial. Ahora se detecta y se cae al reparto por
     neutralidad, avisando (ver D-21).
     """
-    w = float(ancho_deplexion(na, nd, t_k))
+    w = float(ancho_deplecion(na, nd, t_k))
     psi0 = float(potencial_contacto(na, nd, t_k))
     ni = float(concentracion_intrinseca(t_k))
 
@@ -163,10 +163,74 @@ def juntura(d_n_cm, na, nd, t_k, reparto="simetrico"):
         return Juntura(d_n_cm, w, x_n, x_p, psi0, ni, "simetrico")
 
     x_n, x_p = _reparto_por_neutralidad(d_n_cm, w, na, nd)
+    ancho_txt = f"{w * 1e4:.3f}".replace(".", ",")
+    emisor_txt = f"{d_n_cm * 1e4:.3f}".replace(".", ",")
     aviso = (
-        f"Con este dopaje la zona de deplexión mide {w * 1e4:.3f} µm, más que el "
-        f"emisor de {d_n_cm * 1e4:.3f} µm, así que el reparto simétrico del "
-        f"enunciado dejaría su borde fuera de la celda. Se usa el reparto por "
-        f"neutralidad de carga, que es el físicamente correcto."
+        f"Con este dopaje la zona de depleción mide {ancho_txt} µm, más que el emisor de "
+        f"{emisor_txt} µm, así que el reparto simétrico del enunciado dejaría su borde fuera "
+        f"de la celda. Se usa el reparto por neutralidad de carga, que es el físicamente "
+        f"correcto."
     )
     return Juntura(d_n_cm, w, max(x_n, 0.0), x_p, psi0, ni, "neutralidad", aviso)
+
+
+# ---------------------------------------------------------------------------
+# Techo intrinseco de la vida media
+# ---------------------------------------------------------------------------
+
+@dataclass
+class VidaIntrinseca:
+    """Vidas medias que imponen la recombinacion radiativa y la de Auger, en s."""
+
+    radiativa: float
+    auger: float
+
+    @property
+    def limite(self) -> float:
+        """La vida media mas larga posible con este dopaje: las dos tasas sumadas."""
+        return 1.0 / (1.0 / self.radiativa + 1.0 / self.auger)
+
+
+def vida_intrinseca(dopaje_cm3):
+    """
+    Vida media del portador minoritario si el cristal no tuviera ningun defecto.
+
+    En baja inyeccion, un minoritario rodeado de N mayoritarios por centimetro
+    cubico se recombina radiativamente a una tasa proporcional a N, y por Auger a
+    una tasa proporcional a N al cuadrado, porque Auger necesita dos mayoritarios
+    a la vez: uno para recombinarse y otro que se lleve la energia (U2, lamina 27).
+    La vida media es el inverso de cada tasa.
+
+    Por eso Auger domina en el emisor fuertemente dopado y es despreciable en la
+    base: pasar de 4e16 a 6e19 multiplica N por 1500 y la tasa de Auger por dos
+    millones.
+    """
+    n = float(dopaje_cm3)
+    return VidaIntrinseca(radiativa=1.0 / (C.B_RADIATIVO * n),
+                          auger=1.0 / (C.C_AUGER * n * n))
+
+
+def reparto_por_mecanismo(tau_efectiva_s, dopaje_cm3):
+    """
+    Que fraccion de la recombinacion en el volumen aporta cada mecanismo.
+
+    La Unidad 2 (lamina 25) suma los mecanismos como tasas: el inverso de la vida
+    media en el volumen es la suma de los inversos de las vidas radiativa, Auger y
+    SRH. Si el tiempo de vida del control se lee como esa vida efectiva, la parte
+    SRH es lo que queda al restarle las dos intrinsecas, y cada mecanismo aporta en
+    proporcion a su tasa.
+
+    Devuelve None cuando la vida elegida supera el techo intrinseco: ahi la parte
+    SRH saldria negativa, que es la forma matematica de decir que ningun silicio
+    con ese dopaje puede vivir tanto.
+    """
+    vida = vida_intrinseca(dopaje_cm3)
+    tasa_total = 1.0 / float(tau_efectiva_s)
+    tasa_srh = tasa_total - 1.0 / vida.radiativa - 1.0 / vida.auger
+    if tasa_srh < 0.0:
+        return None
+    return {
+        "SRH": tasa_srh / tasa_total,
+        "Auger": (1.0 / vida.auger) / tasa_total,
+        "radiativa": (1.0 / vida.radiativa) / tasa_total,
+    }

@@ -77,10 +77,3 @@ def malla(n_dedos, ancho_dedo_cm, rho_cuadro=C.RHO_CUADRO_EMISOR,
         fraccion_sombra=min(fraccion_sombra, 0.95),
         r_emisor=r_emisor, r_dedos=r_dedos,
     )
-
-
-def barrido_numero_de_dedos(n_min, n_max, ancho_dedo_cm, paso=1):
-    """Recorre el número de dedos para dibujar el compromiso sombra-resistencia."""
-    valores = list(range(int(n_min), int(n_max) + 1, paso))
-    mallas = [malla(n, ancho_dedo_cm) for n in valores]
-    return valores, mallas

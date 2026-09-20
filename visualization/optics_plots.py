@@ -1,34 +1,57 @@
-"""Gráficos cuantitativos de la óptica de la celda."""
+"""
+Gráficos de la Pestaña 1: dónde se absorbe la luz y qué les pasa a los pares.
+
+Ninguna función de este módulo calcula física. Reciben los objetos que ya resolvió
+la capa de física —campo óptico, juntura, probabilidades de destino, reparto— y
+solo deciden cómo dibujarlos.
+"""
 
 import numpy as np
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from units import cm_a_um
-from visualization.colors import hex_de_longitud_onda, rgba_de_longitud_onda
+from visualization.colors import escala_espectral, hex_de_longitud_onda
 
 TINTA = "#E8ECF2"
 REJILLA = "#2A3542"
 SUAVE = "#8894A8"
 ACENTO = "#E5A33F"
+
+# Paleta que usan las figuras de las Pestañas 2, 3 y 4.
 EMISOR = "#2E6F8E"
 BASE = "#5FC49B"
 FUGA = "#A0A8B6"
 PERDIDA = "#969EAC"
 
-BANDAS = (
-    ("Ultravioleta", 300, 400, "#7A5BD0"),
-    ("Azul", 400, 500, "#3A76D8"),
-    ("Verde", 500, 600, "#3FAE6B"),
-    ("Rojo", 600, 700, "#D8632F"),
-    ("Infrarrojo cercano", 700, 1200, "#8E3B2A"),
-)
+# Regiones del dispositivo. Se usan como fondos, con poca opacidad.
+C_EMISOR = "#3B82A8"
+C_DEPLECION = "#E5A33F"
+C_BASE = "#2F8A7E"
+C_ALUMINIO = "#8A8F98"
+
+# Destino de un par. Verde lo que produce corriente; tonos cálidos lo que se pierde.
+C_JUNTURA = "#4CC38A"
+C_SUPERFICIE = "#E4664A"
+C_VOLUMEN = "#C25B8E"
+
+# Pérdidas ópticas: luz que nunca creó un par.
+C_MALLA = "#C9CED6"
+C_REFLEJO = "#8894A8"
+C_FONDO = "#65717F"
+C_ESCAPE = "#A9B4C4"
 
 
-def _base(fig, alto=380, margen_superior=54):
-    """Márgenes generosos arriba: los títulos y las anotaciones necesitan aire."""
+def _base(fig, alto=380, margen_superior=54, margen_inferior=48):
+    """
+    Estilo común de las figuras planas de toda la aplicación.
+
+    Las Pestañas 2, 3 y 4 importan esta función: su comportamiento sobre los ejes
+    primarios no debe cambiar al rehacer las figuras de la Pestaña 1.
+    """
     fig.update_layout(
         height=alto,
-        margin=dict(l=14, r=18, t=margen_superior, b=48),
+        margin=dict(l=14, r=18, t=margen_superior, b=margen_inferior),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         font=dict(color=TINTA, size=12),
@@ -46,417 +69,529 @@ def _titulo(texto, subtitulo=None):
     return dict(text=texto, font=dict(size=14.5), x=0, xanchor="left", y=0.97, yanchor="top")
 
 
-def perfil_generacion(x_cm, g, lambda_nm, d_n_um, W_um, y_max=None, juntura=None):
+def _rgba(hex_color, alfa):
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r},{g},{b},{alfa})"
+
+
+def _coma(x, dec=2):
+    return f"{x:.{dec}f}".replace(".", ",")
+
+
+def _profundidad_texto(um):
+    """Profundidad legible: nanómetros por debajo de la micra, micras por encima."""
+    if um < 1.0:
+        return f"{um * 1e3:.3g} nm".replace(".", ",")
+    return f"{um:.3g} µm".replace(".", ",")
+
+
+def _ticks_log(lo, hi):
+    vals = list(range(int(np.floor(lo)), int(np.ceil(hi)) + 1))
+    return vals, [_profundidad_texto(10.0 ** v) for v in vals]
+
+
+# ---------------------------------------------------------------------------
+# Recorrido completo de los fotones
+# ---------------------------------------------------------------------------
+
+def sankey_de_fotones(fracciones, fraccion_sombra, j_maxima_ma=None, modo="espectro",
+                      lambda_nm=None):
     """
-    Perfil de generación contra profundidad, para un color.
+    El recorrido de cien fotones, de la llegada a la corriente, como flujo.
 
-    El eje vertical se fija al máximo que alcanzaría con la irradiancia más alta
-    del rango, de modo que bajar los soles se vea como una curva que efectivamente
-    se encoge, y no como la misma curva con otra escala.
+    Cada banda tiene un grosor proporcional a la cantidad de fotones que la
+    recorren. Los nodos intermedios son las etapas físicas —cruzar la superficie,
+    absorberse en una región— y los de la derecha son los destinos finales. Los
+    porcentajes se refieren a todos los fotones que llegan a la celda, incluida la
+    parte tapada por la malla.
     """
-    x_um = cm_a_um(x_cm)
-    color = hex_de_longitud_onda(lambda_nm)
+    k = 1.0 - fraccion_sombra
+    f = {c: 100.0 * k * v for c, v in fracciones.items()}
+    umbral = 0.005
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=x_um, y=g, mode="lines", name=f"{lambda_nm:.0f} nm",
-        line=dict(color=color, width=2.4), fill="tozeroy",
-        fillcolor=rgba_de_longitud_onda(lambda_nm, 0.20), showlegend=False,
-        hovertemplate="x = %{x:.3f} µm<br>G = %{y:.3e} 1/(cm³·s·nm)<extra></extra>",
-    ))
+    def pct(v):
+        return _coma(v, 2 if v < 1 else 1) + " %"
 
-    if juntura is not None:
-        fig.add_vrect(x0=cm_a_um(juntura.x_n), x1=cm_a_um(juntura.x_p),
-                      fillcolor=ACENTO, opacity=0.30, line_width=0, layer="below")
-    fig.add_vline(x=d_n_um, line=dict(color=ACENTO, width=1.5, dash="dash"))
-    fig.add_annotation(x=np.log10(d_n_um), y=1.0, yref="paper", text="juntura p-n",
-                       showarrow=False, font=dict(color=ACENTO, size=11),
-                       xanchor="left", yanchor="bottom", xshift=4)
+    em = f["emisor_superficie"] + f["emisor_volumen"] + f["emisor_colectados"]
+    ba = f["base_volumen"] + f["base_superficie"] + f["base_colectados"]
+    col = f["emisor_colectados"] + f["deplecion"] + f["base_colectados"]
+    entran = 100.0 * k - f["reflejados"]
 
-    fig.update_xaxes(title="Profundidad x  [µm]", type="log",
-                     range=[np.log10(max(x_um[1], 1e-4)), np.log10(W_um)])
-    fig.update_yaxes(title="Generación G  [pares / cm³·s·nm]",
-                     range=[0, y_max] if y_max else None)
-    fig.update_layout(title=_titulo(
-        "Dónde nacen los pares electrón-hueco",
-        "el área bajo la curva a la izquierda de la juntura son los pares del emisor"))
-    return _base(fig)
+    corriente = "Corriente eléctrica"
+    if modo == "espectro" and j_maxima_ma is not None:
+        corriente += f" · {_coma(j_maxima_ma * col / 100.0, 2)} mA/cm²"
 
+    # (clave, etiqueta, valor, color, columna)
+    candidatos = [
+        ("llegan", "Fotones que llegan", 100.0, "#AEB8C6", 0),
+        ("malla", "Chocan con la malla de plata", 100.0 * fraccion_sombra, C_MALLA, 1),
+        ("silicio", "Llegan al silicio", 100.0 * k, "#9AA6B6", 1),
+        ("refleja", "Se reflejan en la superficie", f["reflejados"], C_REFLEJO, 2),
+        ("entran", "Entran al silicio", entran, "#6FA8DC", 2),
+        ("aluminio", "Llegan al fondo y los absorbe el aluminio", f["aluminio"], C_FONDO, 3),
+        ("escapan", "Rebotan en el aluminio y escapan", f["escapan"], C_ESCAPE, 3),
+        ("emisor", "Se absorben en el emisor", em, C_EMISOR, 3),
+        ("deplecion", "Se absorben en la zona de depleción", f["deplecion"], C_DEPLECION, 3),
+        ("base", "Se absorben en la base", ba, C_BASE, 3),
+        ("sup_f", "Mueren en la superficie frontal", f["emisor_superficie"], C_SUPERFICIE, 4),
+        ("vol_e", "Se recombinan en el volumen del emisor", f["emisor_volumen"], C_VOLUMEN, 4),
+        ("vol_b", "Se recombinan en el volumen de la base", f["base_volumen"], C_VOLUMEN, 4),
+        ("sup_t", "Mueren en la cara trasera", f["base_superficie"], C_SUPERFICIE, 4),
+        ("juntura", "Llegan a la juntura p-n", col, C_JUNTURA, 4),
+        ("corriente", corriente, col, C_JUNTURA, 5),
+    ]
+    nodos = [c for c in candidatos if c[2] >= umbral]
+    indice = {c[0]: i for i, c in enumerate(nodos)}
 
-def generacion_con_coleccion(x_cm, g, fc, lambda_nm, d_n_um, W_um,
-                             y_max=None, juntura=None):
-    """
-    Perfil de generación separado en lo que se colecta y lo que se recombina.
+    enlaces_def = [
+        ("llegan", "malla", 100.0 * fraccion_sombra), ("llegan", "silicio", 100.0 * k),
+        ("silicio", "refleja", f["reflejados"]), ("silicio", "entran", entran),
+        ("entran", "aluminio", f["aluminio"]), ("entran", "escapan", f["escapan"]),
+        ("entran", "emisor", em), ("entran", "deplecion", f["deplecion"]),
+        ("entran", "base", ba),
+        ("emisor", "sup_f", f["emisor_superficie"]), ("emisor", "vol_e", f["emisor_volumen"]),
+        ("emisor", "juntura", f["emisor_colectados"]),
+        ("deplecion", "juntura", f["deplecion"]),
+        ("base", "vol_b", f["base_volumen"]), ("base", "sup_t", f["base_superficie"]),
+        ("base", "juntura", f["base_colectados"]),
+        ("juntura", "corriente", col),
+    ]
+    enlaces = [(a, b, v) for a, b, v in enlaces_def
+               if v >= umbral and a in indice and b in indice]
 
-    El área de abajo son los pares que alcanzan la juntura y producen corriente;
-    la de arriba, los que se recombinan antes de llegar. La suma de ambas es la
-    generación total, idéntica a la del modelo óptico solo.
-    """
-    x_um = cm_a_um(x_cm)
-    color = hex_de_longitud_onda(lambda_nm)
-    colectada = g * fc
-    perdida = g * (1.0 - fc)
+    columnas_x = (0.001, 0.15, 0.31, 0.50, 0.75, 0.999)
+    x_nodo, y_nodo = [], []
+    for columna in range(6):
+        en_col = [c for c in nodos if c[4] == columna]
+        total = sum(c[2] for c in en_col)
+        margen = 0.06 * max(total, 1e-9)
+        altura = total + margen * max(len(en_col) - 1, 0)
+        acumulado = 0.0
+        for c in en_col:
+            centro = (acumulado + c[2] / 2.0) / max(altura, 1e-9)
+            y_nodo.append(0.04 + 0.92 * centro)
+            x_nodo.append(columnas_x[columna])
+            acumulado += c[2] + margen
+    # Reordenar x,y según el orden de `nodos`, que es el de `candidatos` filtrado
+    orden = [c for columna in range(6) for c in nodos if c[4] == columna]
+    posicion = {c[0]: (x_nodo[i], y_nodo[i]) for i, c in enumerate(orden)}
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=x_um, y=colectada, mode="lines", name="Se colecta",
-        stackgroup="g", line=dict(width=0.5, color=color),
-        fillcolor=rgba_de_longitud_onda(lambda_nm, 0.55),
-        hovertemplate="x = %{x:.3f} µm<br>colectado %{y:.3e}<extra></extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        x=x_um, y=perdida, mode="lines", name="Se recombina antes de llegar",
-        stackgroup="g", line=dict(width=0.5, color=PERDIDA),
-        fillcolor="rgba(150,158,172,0.42)",
-        hovertemplate="x = %{x:.3f} µm<br>perdido %{y:.3e}<extra></extra>",
-    ))
+    j_por_pct = (j_maxima_ma / 100.0) if (modo == "espectro" and j_maxima_ma) else None
+    hover_enlace = [
+        (f"{pct(v)} de los fotones que llegan"
+         + (f"<br>equivale a {_coma(j_por_pct * v, 2)} mA/cm²" if j_por_pct else ""))
+        for _, _, v in enlaces
+    ]
 
-    if juntura is not None:
-        fig.add_vrect(x0=cm_a_um(juntura.x_n), x1=cm_a_um(juntura.x_p),
-                      fillcolor=ACENTO, opacity=0.30, line_width=0, layer="below")
-    fig.add_vline(x=d_n_um, line=dict(color=ACENTO, width=1.5, dash="dash"))
-    fig.add_annotation(x=np.log10(d_n_um), y=1.0, yref="paper", text="juntura p-n",
-                       showarrow=False, font=dict(color=ACENTO, size=11),
-                       xanchor="left", yanchor="bottom", xshift=4)
-
-    fig.update_xaxes(title="Profundidad x  [µm]", type="log",
-                     range=[np.log10(max(x_um[1], 1e-4)), np.log10(W_um)])
-    fig.update_yaxes(title="Generación G  [pares / cm³·s·nm]",
-                     range=[0, y_max] if y_max else None)
-    fig.update_layout(
-        title=_titulo(f"Destino de los pares nacidos a cada profundidad · {lambda_nm:.0f} nm",
-                      "el área gris es lo que se recombina antes de alcanzar la juntura"),
-        legend=dict(orientation="h", y=-0.26, x=0, font=dict(size=10.5)),
-    )
-    return _base(fig, alto=400, margen_superior=58)
-
-
-def perfil_coleccion(x_cm, fc, juntura, d_n_um, W_um, transporte=None):
-    """
-    Probabilidad de colección contra profundidad, con las tres regiones marcadas.
-
-    Vale 1 en ambos bordes de la zona de deplexión y decae hacia las superficies
-    según cuánto pese cada velocidad de recombinación frente a la difusión.
-    """
-    x_um = cm_a_um(x_cm)
-    x_n_um, x_p_um = cm_a_um(juntura.x_n), cm_a_um(juntura.x_p)
-
-    fig = go.Figure()
-    fig.add_vrect(x0=max(x_um[0], 1e-4), x1=x_n_um, fillcolor=EMISOR, opacity=0.11,
-                  line_width=0, layer="below")
-    fig.add_vrect(x0=x_n_um, x1=x_p_um, fillcolor=ACENTO, opacity=0.30,
-                  line_width=0, layer="below")
-    fig.add_vrect(x0=x_p_um, x1=W_um, fillcolor=BASE, opacity=0.11,
-                  line_width=0, layer="below")
-
-    fig.add_trace(go.Scatter(
-        x=x_um, y=100 * fc, mode="lines", showlegend=False,
-        line=dict(color=TINTA, width=2.6),
-        hovertemplate="x = %{x:.3f} µm<br>se colecta el %{y:.1f} %<extra></extra>",
-    ))
-
-    for x_pos, texto, color in ((np.sqrt(max(x_um[1], 1e-3) * x_n_um), "emisor", EMISOR),
-                                (np.sqrt(x_p_um * W_um), "base", BASE)):
-        fig.add_annotation(x=np.log10(x_pos), y=0.04, yref="paper", text=texto,
-                           showarrow=False, font=dict(color=color, size=11))
-    fig.add_annotation(x=np.log10(d_n_um), y=1.0, yref="paper",
-                       text="zona de deplexión", showarrow=False,
-                       font=dict(color=ACENTO, size=11), xanchor="left",
-                       yanchor="bottom", xshift=4)
-
-    subtitulo = "vale 100 % en los bordes de la deplexión y cae hacia las superficies"
-    if transporte is not None:
-        subtitulo = (f"peso de la superficie frontal S_f·L_p/D_p = "
-                     f"{transporte.peso_superficie_frontal:.1f}  ·  "
-                     f"trasera S_r·L_n/D_n = {transporte.peso_superficie_trasera:.2f}")
-
-    fig.update_xaxes(title="Profundidad x  [µm]", type="log",
-                     range=[np.log10(max(x_um[1], 1e-4)), np.log10(W_um)])
-    fig.update_yaxes(title="Probabilidad de colección  [%]", range=[0, 104])
-    fig.update_layout(title=_titulo(
-        "Qué fracción de los pares nacidos a cada profundidad llega viva a la juntura",
-        subtitulo))
-    return _base(fig, alto=400)
-
-
-def penetracion_por_color(lambda_nm, prof_um, d_n_um, W_um, lambda_marcada=None):
-    """
-    Profundidad característica de penetración, con las tres regiones sombreadas.
-
-    Las bandas de color dicen directamente qué le pasa a cada color: si la curva
-    cae en la banda de abajo, ese color se absorbe dentro del emisor; si cae en
-    la del medio, llega a la base; si cae arriba, atraviesa la celda.
-    """
-    fig = go.Figure()
-    techo = float(np.max(prof_um)) * 1.5
-
-    for y0, y1, color, etiqueta in (
-        (1e-4, d_n_um, EMISOR, "se absorbe dentro del emisor"),
-        (d_n_um, W_um, BASE, "alcanza la base"),
-        (W_um, techo, FUGA, "atraviesa la celda"),
-    ):
-        fig.add_hrect(y0=y0, y1=y1, fillcolor=color, opacity=0.13,
-                      line_width=0, layer="below")
-        fig.add_annotation(
-            x=1.0, xref="paper", y=np.log10(np.sqrt(y0 * y1)),
-            text=etiqueta, showarrow=False, xanchor="right", xshift=-6,
-            font=dict(color=color, size=10.5),
-        )
-
-    fig.add_trace(go.Scatter(
-        x=lambda_nm, y=prof_um, mode="lines", name="1/α",
-        line=dict(color=ACENTO, width=2.6), showlegend=False,
-        hovertemplate="λ = %{x:.0f} nm<br>penetra %{y:.3g} µm<extra></extra>",
-    ))
-    if lambda_marcada is not None:
-        fig.add_vline(x=lambda_marcada,
-                      line=dict(color=hex_de_longitud_onda(lambda_marcada),
-                                width=2, dash="dot"))
-
-    fig.update_xaxes(title="Longitud de onda λ  [nm]")
-    fig.update_yaxes(title="Profundidad de penetración 1/α  [µm]", type="log",
-                     range=[np.log10(max(np.min(prof_um) * 0.5, 1e-4)), np.log10(techo)])
-    fig.update_layout(title=_titulo(
-        "Cuán profundo entra cada color antes de apagarse",
-        "1/α es la profundidad donde el flujo cae a un 37 % del que entró"))
-    return _base(fig, alto=400)
-
-
-def acumulado_espectral(x_cm, lambda_nm, G, d_n_um, W_um):
-    """
-    Fracción acumulada de pares generados por encima de cada profundidad.
-
-    Responde de un vistazo la pregunta central de la pestaña: a qué profundidad
-    ya nació la mitad de los pares, y cómo cambia esa respuesta según el color.
-    Cada banda espectral tiene su propia curva, integrada sobre sus longitudes
-    de onda con el peso real del espectro solar.
-    """
-    x_um = cm_a_um(x_cm)
-    fig = go.Figure()
-
-    def acumulada(mascara):
-        g = np.trapezoid(G[:, mascara], lambda_nm[mascara], axis=1)
-        acum = np.concatenate([[0.0], np.cumsum(np.diff(x_um) * (g[:-1] + g[1:]) / 2)])
-        return acum / acum[-1] if acum[-1] > 0 else acum
-
-    for etiqueta, lo, hi, color in BANDAS:
-        m = (lambda_nm >= lo) & (lambda_nm < hi)
-        if not np.any(m):
-            continue
-        fig.add_trace(go.Scatter(
-            x=x_um, y=100 * acumulada(m), mode="lines", name=etiqueta,
-            line=dict(color=color, width=1.9),
-            hovertemplate="%{y:.1f} % de los pares de esta banda<br>"
-                          "nacen antes de %{x:.3g} µm<extra></extra>",
-        ))
-
-    total = 100 * acumulada(np.ones_like(lambda_nm, dtype=bool))
-    fig.add_trace(go.Scatter(
-        x=x_um, y=total, mode="lines", name="Todo el espectro",
-        line=dict(color=TINTA, width=3),
-        hovertemplate="%{y:.1f} % de todos los pares<br>"
-                      "nacen antes de %{x:.3g} µm<extra></extra>",
-    ))
-
-    fig.add_vline(x=d_n_um, line=dict(color=ACENTO, width=1.5, dash="dash"))
-    fig.add_annotation(x=np.log10(d_n_um), y=1.0, yref="paper", text="juntura p-n",
-                       showarrow=False, font=dict(color=ACENTO, size=11),
-                       xanchor="left", yanchor="bottom", xshift=4)
-    fig.add_hline(y=50, line=dict(color=SUAVE, width=1, dash="dot"))
-
-    fig.update_xaxes(title="Profundidad x  [µm]", type="log",
-                     range=[np.log10(max(x_um[1], 1e-4)), np.log10(W_um)])
-    fig.update_yaxes(title="Pares ya generados  [% del total de su banda]",
-                     range=[0, 102])
-    fig.update_layout(
-        title=_titulo("A qué profundidad ya nació cada mitad de los pares",
-                      "cada curva llega al 100 % cuando esa banda terminó de absorberse"),
-        legend=dict(orientation="h", y=-0.24, x=0, font=dict(size=10.5)),
-    )
-    return _base(fig, alto=420, margen_superior=58)
-
-
-def _avance_por_color(x_cm, lambda_nm, G, n_lam=200, n_x=180):
-    """
-    Fracción de los pares de cada color ya creados por encima de cada profundidad.
-
-    Normalizar cada color contra sí mismo, en vez de dibujar la generación
-    absoluta, es lo que hace legible el mapa. La generación abarca más de
-    trescientas décadas entre el ultravioleta que muere en nanómetros y el
-    infrarrojo que apenas se atenúa; con una escala logarítmica global el 26 % del
-    mapa quedaba contra el piso y 46 colores enteros salían planos, lo que se lee
-    como «aquí no se genera nada» y es falso (ver D-29).
-
-    Esta cantidad está acotada entre cero y uno, así que no necesita escala
-    logarítmica ni piso arbitrario, y cada color usa todo el rango de la paleta.
-    """
-    idx_l = np.linspace(0, len(lambda_nm) - 1, n_lam).astype(int)
-    idx_x = np.linspace(0, len(x_cm) - 1, n_x).astype(int)
-    x = x_cm[idx_x]
-    g = G[np.ix_(idx_x, idx_l)]                      # (nx, nl)
-
-    paso = np.diff(x)[:, None]
-    acum = np.concatenate([np.zeros((1, g.shape[1])),
-                           np.cumsum(paso * (g[:-1] + g[1:]) / 2.0, axis=0)])
-    total = acum[-1]
-    frac = np.divide(acum, total, out=np.zeros_like(acum),
-                     where=total > 0)
-    return cm_a_um(x), lambda_nm[idx_l], frac
-
-
-def mapa_generacion(x_cm, lambda_nm, G, d_n_um, W_um, n_lam=200, n_x=180):
-    """Frente de absorción en el plano color-profundidad."""
-    x_um, lam, frac = _avance_por_color(x_cm, lambda_nm, G, n_lam, n_x)
-
-    fig = go.Figure(go.Heatmap(
-        x=x_um, y=lam, z=100 * frac.T, colorscale="Viridis", zmin=0, zmax=100,
-        colorbar=dict(title=dict(text="% ya absorbido", side="right"), thickness=12,
-                      len=0.85, y=0.45),
-        hovertemplate="x = %{x:.3g} µm<br>λ = %{y:.0f} nm<br>"
-                      "%{z:.1f} % de este color ya se absorbió<extra></extra>",
-    ))
-    # La curva del 50 % es el frente de absorción: donde cada color entrega la
-    # mitad de sus pares. Es la diagonal que la escala anterior escondía.
-    fig.add_trace(go.Contour(
-        x=x_um, y=lam, z=100 * frac.T, showscale=False, contours=dict(
-            start=50, end=50, size=1, coloring="none",
-            showlabels=True, labelfont=dict(size=10, color=TINTA)),
-        line=dict(color=ACENTO, width=2.2), hoverinfo="skip", name="mitad absorbida",
-    ))
-    fig.add_vline(x=d_n_um, line=dict(color="#8FD6FF", width=1.5, dash="dash"))
-    fig.add_annotation(x=np.log10(d_n_um), y=1.0, yref="paper", text="juntura p-n",
-                       showarrow=False, font=dict(color="#8FD6FF", size=11),
-                       xanchor="left", yanchor="bottom", xshift=4)
-    fig.update_xaxes(title="Profundidad x  [µm]", type="log")
-    fig.update_yaxes(title="Longitud de onda λ  [nm]")
-    fig.update_layout(title=_titulo(
-        "El frente de absorción, color por color",
-        "cada fila se normaliza contra sí misma; la línea ámbar marca dónde cada "
-        "color ya entregó la mitad de sus pares"))
-    return _base(fig, alto=440)
-
-
-def relieve_generacion_3d(x_cm, lambda_nm, G, fc, d_n_um, W_um,
-                          n_lam=90, n_x=80):
-    """
-    Superficie tridimensional de dónde sale realmente la corriente.
-
-    No dibuja la generación, sino el producto de la generación por la probabilidad
-    de colección: los pares que además **sobreviven** hasta la juntura. Es la
-    densidad de corriente por unidad de profundidad y de longitud de onda, y su
-    integral sobre toda la superficie es exactamente la corriente fotogenerada.
-
-    Es la vista que separa las dos pérdidas de un vistazo: el hundimiento pegado a
-    la superficie frontal es recombinación superficial, y la cola que se apaga
-    hacia el infrarrojo es absorción incompleta.
-    """
-    idx_l = np.linspace(0, len(lambda_nm) - 1, n_lam).astype(int)
-    idx_x = np.linspace(0, len(x_cm) - 1, n_x).astype(int)
-    x = x_cm[idx_x]
-    x_um = cm_a_um(x)
-    lam = lambda_nm[idx_l]
-
-    # Aporte a la corriente por unidad de profundidad y de color.
-    aporte = G[np.ix_(idx_x, idx_l)] * np.asarray(fc)[idx_x, None]      # (nx, nl)
-
-    # El eje de profundidad es logaritmico, asi que la densidad que hay que dibujar
-    # es la ponderada por x: el area bajo x*(dJ/dx) frente a ln(x) es la corriente.
-    # Sin esa ponderacion la superficie es un pico en el ultravioleta y una llanura
-    # roja en todo lo demas, que es el mismo defecto del mapa antiguo (ver D-29).
-    densidad = (aporte * x[:, None]).T                                   # (nl, nx)
-
-    # Dos canales, porque son dos preguntas distintas. La altura, normalizada color
-    # a color, dice DONDE nace la corriente de ese color. El color de la superficie
-    # dice CUANTO aporta ese color al total, que es lo que la altura ya no puede
-    # decir despues de normalizar.
-    techo = np.maximum(densidad.max(axis=1, keepdims=True), 1e-30)
-    z = densidad / techo
-    reparto = np.trapezoid(aporte, x, axis=0)
-    reparto = reparto / max(reparto.max(), 1e-30)
-    color = np.repeat(reparto[:, None], len(x_um), axis=1)
-
-    fig = go.Figure(go.Surface(
-        x=np.log10(np.clip(x_um, 1e-4, None)), y=lam, z=z,
-        surfacecolor=color, colorscale="Inferno", cmin=0, cmax=1,
-        colorbar=dict(title=dict(text="aporte del color", side="right"),
-                      thickness=12, len=0.7),
-        contours=dict(z=dict(show=True, usecolormap=False, color=SUAVE,
-                             project_z=False, width=1)),
-        hovertemplate="x = %{customdata[0]:.3g} µm<br>λ = %{y:.0f} nm<br>"
-                      "aquí nace el %{z:.0%} del máximo de este color<br>"
-                      "este color aporta %{customdata[1]:.0%} del máximo"
-                      "<extra></extra>",
-        customdata=np.dstack([np.tile(x_um, (len(lam), 1)), color]),
-    ))
-    fig.update_layout(
-        title=_titulo("De dónde sale la corriente, en volumen",
-                      "generación multiplicada por la probabilidad de colección"),
-        height=520, margin=dict(l=6, r=6, t=58, b=6),
-        paper_bgcolor="rgba(0,0,0,0)", font=dict(color=TINTA, size=12),
-        scene=dict(
-            xaxis=dict(title="log₁₀ profundidad [µm]", gridcolor=REJILLA,
-                       backgroundcolor="rgba(0,0,0,0)", zerolinecolor=REJILLA),
-            yaxis=dict(title="λ [nm]", gridcolor=REJILLA,
-                       backgroundcolor="rgba(0,0,0,0)", zerolinecolor=REJILLA),
-            zaxis=dict(title="aporte relativo", gridcolor=REJILLA,
-                       backgroundcolor="rgba(0,0,0,0)", zerolinecolor=REJILLA),
-            camera=dict(eye=dict(x=1.7, y=-1.5, z=1.05)),
-            aspectratio=dict(x=1.25, y=1.15, z=0.62),
+    fig = go.Figure(go.Sankey(
+        arrangement="snap",
+        valueformat=".2f",
+        node=dict(
+            label=[f"{c[1]} · {pct(c[2])}" if c[0] != "corriente" else c[1] for c in nodos],
+            color=[c[3] for c in nodos],
+            x=[posicion[c[0]][0] for c in nodos],
+            y=[posicion[c[0]][1] for c in nodos],
+            pad=14, thickness=16,
+            line=dict(color="rgba(0,0,0,0)", width=0),
+            hovertemplate="%{label}<extra></extra>",
         ),
+        link=dict(
+            source=[indice[a] for a, _, _ in enlaces],
+            target=[indice[b] for _, b, _ in enlaces],
+            value=[v for _, _, v in enlaces],
+            color=[_rgba(nodos[indice[b]][3], 0.38) for _, b, _ in enlaces],
+            customdata=hover_enlace,
+            hovertemplate="%{source.label}<br>→ %{target.label}<br>%{customdata}<extra></extra>",
+        ),
+        textfont=dict(color=TINTA, size=11.5),
+    ))
+    titulo = ("El recorrido de 100 fotones del Sol hasta la corriente" if modo == "espectro"
+              else f"El recorrido de 100 fotones de {lambda_nm:.0f} nm hasta la corriente")
+    fig.update_layout(title=_titulo(
+        titulo, "el grosor de cada banda es proporcional a la cantidad de fotones que la "
+                "recorre; a la derecha quedan los destinos finales"))
+    return _base(fig, alto=580, margen_superior=64, margen_inferior=16)
+
+
+# ---------------------------------------------------------------------------
+# Dónde se absorbe cada color
+# ---------------------------------------------------------------------------
+
+# Escala perceptual «inferno», escrita punto por punto, con un solo cambio: su negro
+# original, #000004, es uno de los colores que el tema de Streamlit usa como marcador
+# interno y reemplaza por un color de su paleta. El cero del mapa salía rojo. Se usa
+# un negro equivalente que no coincide con esos marcadores.
+_ESCALA_INFERNO = [
+    [0.000, "#03020C"], [0.111, "#1B0C41"], [0.222, "#4A0C6B"], [0.333, "#781C6D"],
+    [0.444, "#A52C60"], [0.556, "#CF4446"], [0.667, "#ED6925"], [0.778, "#FB9B06"],
+    [0.889, "#F7D13D"], [1.000, "#FCFFA4"],
+]
+
+
+def _absorcion_acumulada(campo, indices):
+    """
+    Fracción de los fotones que entraron ya absorbida antes de cada profundidad.
+
+    Se integra la generación del modelo, no la exponencial cerrada, para que con el
+    reflector encendido la figura incluya también la luz que vuelve del aluminio.
+    """
+    x = campo.x_cm
+    G = campo.G[:, indices]
+    entra = campo.Nph[indices] * (1.0 - campo.R[indices])
+    paso = np.diff(x)[:, None]
+    acum = np.concatenate([np.zeros((1, len(indices))),
+                           np.cumsum(paso * (G[:-1] + G[1:]) / 2.0, axis=0)])
+    return acum / np.maximum(entra, 1e-300)
+
+
+def _profundidad_de_fraccion(x_cm, acum, objetivo):
+    """Profundidad en µm a la que la absorción acumulada alcanza un objetivo; NaN si no llega."""
+    salida = np.full(acum.shape[1], np.nan)
+    for j in range(acum.shape[1]):
+        col = acum[:, j]
+        if col[-1] < objetivo:
+            continue
+        i = int(np.argmax(col >= objetivo))
+        if i == 0:
+            salida[j] = cm_a_um(x_cm[1])
+            continue
+        salida[j] = cm_a_um(np.interp(objetivo, [col[i - 1], col[i]], [x_cm[i - 1], x_cm[i]]))
+    return salida
+
+
+def mapa_absorcion(campo, union, lambda_marcada=None, paso_lambda=3, capas_por_decada=12):
+    """
+    Mapa λ-x: probabilidad de que un fotón que entró se absorba en cada capa.
+
+    La celda se divide en capas cada vez más gruesas hacia el fondo, todas del mismo
+    ancho en escala logarítmica (doce por década de profundidad). Con esa división,
+    la probabilidad por capa es comparable entre colores sin ninguna normalización
+    artificial: cada color dibuja una franja brillante centrada en su profundidad
+    característica, y la franja se corre hacia el fondo de la celda a medida que
+    aumenta la longitud de onda.
+    """
+    idx = np.arange(0, campo.lambda_nm.size, paso_lambda)
+    lam = campo.lambda_nm[idx]
+    acum = _absorcion_acumulada(campo, idx)
+
+    W_um = float(cm_a_um(campo.W_cm))
+    lo, hi = -3.0, float(np.log10(W_um))
+    n_capas = int(np.ceil((hi - lo) * capas_por_decada))
+    bordes_log = np.linspace(lo, hi, n_capas + 1)
+    bordes_cm = (10.0 ** bordes_log) * 1e-4
+
+    F = np.empty((n_capas + 1, lam.size))
+    for j in range(lam.size):
+        F[:, j] = np.interp(bordes_cm, campo.x_cm, acum[:, j])
+    prob = np.diff(F, axis=0)
+    prob[0, :] += F[0, :]          # el primer nanómetro se suma a la primera capa
+    centros = 0.5 * (bordes_log[:-1] + bordes_log[1:])
+    z = 100.0 * prob
+
+    desde = [_profundidad_texto(10.0 ** b) for b in bordes_log[:-1]]
+    hasta = [_profundidad_texto(10.0 ** b) for b in bordes_log[1:]]
+    # Filas: colores; columnas: capas. La profundidad va en el eje horizontal y la
+    # longitud de onda en el vertical, de modo que al avanzar hacia adentro de la celda
+    # se lee cómo la absorción pasa a colores cada vez más largos.
+    z = z.T
+    customdata = np.empty((lam.size, n_capas, 2), dtype=object)
+    for i in range(n_capas):
+        customdata[:, i, 0] = "la superficie" if i == 0 else desde[i]
+        customdata[:, i, 1] = hasta[i]
+
+    fig = make_subplots(rows=1, cols=2, shared_yaxes=True, column_widths=[0.022, 0.978],
+                        horizontal_spacing=0.006)
+    fig.add_trace(go.Heatmap(
+        x=[0], y=lam, z=[[l] for l in lam], colorscale=escala_espectral(lam), showscale=False,
+        hoverinfo="skip"), row=1, col=1)
+    zmax = float(max(7.5, np.percentile(z, 99.0)))
+    fig.add_trace(go.Heatmap(
+        x=centros, y=lam, z=z, colorscale=_ESCALA_INFERNO, zmin=0.0, zmax=zmax,
+        customdata=customdata,
+        colorbar=dict(title=dict(text="% absorbido<br>en la capa", side="top"),
+                      thickness=12, len=0.85, ticksuffix=" %"),
+        hovertemplate=("λ = %{y:.0f} nm<br>capa desde %{customdata[0]} hasta "
+                       "%{customdata[1]}<br>aquí se absorbe el %{z:.2f} % de los "
+                       "fotones de este color que entraron<extra></extra>"),
+    ), row=1, col=2)
+
+    for objetivo, nombre, estilo in ((0.5, "50 % ya absorbido", dict(color=TINTA, width=1.6, dash="dash")),
+                                     (0.9, "90 % ya absorbido", dict(color="#8FD6FF", width=1.8))):
+        prof = _profundidad_de_fraccion(campo.x_cm, acum, objetivo)
+        fig.add_trace(go.Scatter(
+            x=np.log10(prof), y=lam, mode="lines", name=nombre, line=estilo,
+            hovertemplate="λ = %{y:.0f} nm<br>" + nombre + " a %{customdata}<extra></extra>",
+            customdata=[_profundidad_texto(p) if np.isfinite(p) else "—" for p in prof],
+        ), row=1, col=2)
+
+    x_n = float(cm_a_um(union.x_n))
+    x_p = float(cm_a_um(union.x_p))
+    fig.add_vrect(x0=np.log10(max(x_n, 1e-3)), x1=np.log10(x_p), fillcolor=C_DEPLECION,
+                  opacity=0.35, line_width=0, row=1, col=2)
+    fig.add_vline(x=np.log10(x_p), line=dict(color=C_DEPLECION, width=1.2), row=1, col=2)
+    fig.add_vline(x=hi, line=dict(color="#C4C9D1", width=2), row=1, col=2)
+    for x, texto, color in ((0.5 * (lo + np.log10(max(x_n, 1e-3))), "emisor n", "#8FC3E0"),
+                            (0.5 * (np.log10(x_p) + hi), "base p", "#8FD6C6")):
+        fig.add_annotation(x=x, xref="x2", y=1.0, yref="paper", text=texto, showarrow=False,
+                           yanchor="bottom", font=dict(color=color, size=11))
+    for x, texto, color in ((np.log10(x_p), "juntura p-n", C_DEPLECION),
+                            (hi, "contacto de aluminio", "#C4C9D1")):
+        fig.add_annotation(x=x, xref="x2", y=0.97, yref="paper", text=texto, showarrow=False,
+                           textangle=-90, xanchor="right", yanchor="top", xshift=-3,
+                           font=dict(color=color, size=10.5), bgcolor="rgba(13,19,28,0.6)")
+
+    if lambda_marcada is not None:
+        fig.add_hline(y=lambda_marcada, line=dict(color=hex_de_longitud_onda(lambda_marcada),
+                                                  width=2, dash="dot"), row=1, col=2)
+
+    vals, textos = _ticks_log(lo, hi)
+    fig.update_xaxes(gridcolor=REJILLA, zerolinecolor=REJILLA)
+    fig.update_yaxes(gridcolor=REJILLA, zerolinecolor=REJILLA)
+    fig.update_xaxes(visible=False, row=1, col=1)
+    fig.update_xaxes(title="Profundidad desde la superficie iluminada  [escala logarítmica]",
+                     range=[lo, hi], tickvals=vals, ticktext=textos, row=1, col=2)
+    fig.update_yaxes(title="Longitud de onda λ  [nm]", range=[float(lam[0]), float(lam[-1])],
+                     row=1, col=1)
+    fig.update_layout(
+        title=_titulo("¿A qué profundidad se absorbe cada color?",
+                      "probabilidad de que un fotón que entró al silicio se absorba en cada capa<br>"
+                      "las líneas marcan dónde ya se absorbió el 50 % y el 90 % de cada color"),
+        legend=dict(orientation="h", yanchor="top", y=-0.13, x=0, font=dict(size=10.5)),
     )
-    return fig
+    return _base(fig, alto=620, margen_superior=112, margen_inferior=100)
+
+LAMBDAS_RAYOS = (350, 400, 450, 500, 550, 600, 650, 700, 750, 800, 850,
+                 900, 950, 1000, 1050, 1100, 1150)
 
 
-def balance_espectral(balance, lambda_marcada=None):
-    """Reparto de los fotones incidentes color por color. Es la verificación V1."""
+def rayos_de_penetracion(campo, union, lambda_marcada=None):
+    """
+    Un rayo por color, bajando por un corte de la celda hasta donde se apaga.
+
+    El tramo grueso llega a la profundidad 1/α, donde ya se absorbió el 63 % de los
+    fotones que entraron; el tramo fino sigue hasta donde se absorbió el 90 %. La
+    curva punteada es la misma profundidad 1/α para todos los colores, que es la
+    salida que pide el enunciado superpuesta al espesor de la celda.
+    """
+    W_um = float(cm_a_um(campo.W_cm))
+    x_n = float(cm_a_um(union.x_n))
+    x_p = float(cm_a_um(union.x_p))
+    lo = -3.0
+    fondo = float(np.log10(W_um))
+    abajo = float(np.log10(W_um * 6.0))
+
     fig = go.Figure()
-    for clave, etiqueta, color in (
-        ("reflejada", "Reflejada en la superficie", SUAVE),
-        ("absorbida", "Absorbida en el silicio", ACENTO),
-        ("transmitida", "Llega al contacto trasero", EMISOR),
+    bandas = (
+        (lo, np.log10(max(x_n, 1e-3)), C_EMISOR, 0.20, "emisor n"),
+        (np.log10(max(x_n, 1e-3)), np.log10(x_p), C_DEPLECION, 0.55, None),
+        (np.log10(x_p), fondo, C_BASE, 0.16, "base p"),
+        (fondo, fondo + 0.07, C_ALUMINIO, 0.75, None),
+        (fondo + 0.07, abajo, "#0D131C", 0.0, None),
+    )
+    for y0, y1, color, opacidad, texto in bandas:
+        fig.add_hrect(y0=y0, y1=y1, fillcolor=color, opacity=opacidad, line_width=0,
+                      layer="below")
+        if texto:
+            fig.add_annotation(x=1.0, xref="paper", y=0.5 * (y0 + y1), text=texto,
+                               showarrow=False, xanchor="right", xshift=-4,
+                               font=dict(color=TINTA, size=11))
+    fig.add_annotation(x=1.0, xref="paper", y=np.log10(x_p), text="juntura p-n",
+                       showarrow=False, xanchor="right", xshift=-4, yshift=-9,
+                       font=dict(color=C_DEPLECION, size=11))
+    fig.add_annotation(x=1.0, xref="paper", y=fondo + 0.035, text="aluminio",
+                       showarrow=False, xanchor="right", xshift=-4,
+                       font=dict(color="#0D131C", size=10.5))
+    fig.add_annotation(x=1.0, xref="paper", y=0.5 * (fondo + 0.07 + abajo),
+                       text="fuera de la celda", showarrow=False, xanchor="right",
+                       xshift=-4, font=dict(color=SUAVE, size=11))
+
+    # Curva continua 1/α(λ), recortada al rango dibujado
+    prof = cm_a_um(1.0 / campo.alpha)
+    y_curva = np.log10(prof)
+    y_curva = np.where(y_curva <= abajo, y_curva, np.nan)
+    fig.add_trace(go.Scatter(
+        x=campo.lambda_nm, y=y_curva, mode="lines", name="1/α para todos los colores",
+        line=dict(color=TINTA, width=1.2, dash="dot"),
+        hovertemplate="λ = %{x:.0f} nm<br>1/α = %{customdata}<extra></extra>",
+        customdata=[_profundidad_texto(p) for p in prof],
+    ))
+
+    colores = sorted(set(LAMBDAS_RAYOS) | ({int(round(lambda_marcada))} if lambda_marcada else set()))
+    for lam in colores:
+        i = int(np.argmin(np.abs(campo.lambda_nm - lam)))
+        a = float(campo.alpha[i])
+        d63 = float(cm_a_um(1.0 / a))
+        d90 = float(cm_a_um(np.log(10.0) / a))
+        llega_fondo = float(np.exp(-a * campo.W_cm))
+        color = hex_de_longitud_onda(lam)
+        marcado = lambda_marcada is not None and lam == int(round(lambda_marcada))
+        ancho = 13 if marcado else 8
+        texto_hover = (f"{lam} nm<br>el 63 % se absorbe antes de {_profundidad_texto(d63)}"
+                       f"<br>el 90 % antes de {_profundidad_texto(d90)}"
+                       f"<br>llega al fondo el {_coma(100 * llega_fondo, 1)} % de los que entran")
+
+        fin_grueso = np.log10(min(d63, W_um))
+        fig.add_trace(go.Scatter(
+            x=[lam, lam], y=[lo, fin_grueso], mode="lines", showlegend=False,
+            line=dict(color=color, width=ancho), hovertemplate=texto_hover + "<extra></extra>"))
+        if d63 < W_um:
+            fig.add_trace(go.Scatter(
+                x=[lam, lam], y=[fin_grueso, np.log10(min(d90, W_um))], mode="lines",
+                showlegend=False, opacity=0.55, line=dict(color=color, width=max(ancho - 5, 3)),
+                hovertemplate=texto_hover + "<extra></extra>"))
+        if d90 > W_um:
+            simbolo = "triangle-up" if campo.reflector else "x"
+            fig.add_trace(go.Scatter(
+                x=[lam], y=[fondo], mode="markers", showlegend=False,
+                marker=dict(symbol=simbolo, size=11, color=color, line=dict(color="#0D131C", width=1)),
+                hovertemplate=texto_hover + ("<br>rebota en el aluminio" if campo.reflector
+                                             else "<br>lo absorbe el aluminio") + "<extra></extra>"))
+            if campo.reflector:
+                # El haz de vuelta: recorre lo que le queda hasta el 90 % hacia arriba.
+                resto = d90 - W_um
+                tope = np.log10(max(W_um - resto, 1e-3)) if resto < W_um else lo
+                fig.add_trace(go.Scatter(
+                    x=[lam + 12, lam + 12], y=[fondo, tope], mode="lines", showlegend=False,
+                    line=dict(color=color, width=2, dash="dot"), hoverinfo="skip"))
+        fig.add_annotation(x=lam, y=lo, text=f"{lam}", showarrow=False, yshift=12,
+                           font=dict(color=color if lam > 380 else TINTA,
+                                     size=12 if marcado else 10.5))
+
+    for nombre, estilo in (("tramo grueso: se absorbió el 63 %", dict(color=TINTA, width=8)),
+                           ("tramo fino: se absorbió el 90 %", dict(color=TINTA, width=3))):
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode="lines", name=nombre, line=estilo))
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None], mode="markers", name=("▲ rebota en el aluminio" if campo.reflector
+                                                   else "× lo absorbe el aluminio"),
+        marker=dict(symbol="triangle-up" if campo.reflector else "x", size=10, color=TINTA)))
+
+    vals, textos = _ticks_log(lo, abajo)
+    fig.update_yaxes(title="Profundidad desde la superficie iluminada",
+                     range=[abajo, lo - 0.18], tickvals=vals, ticktext=textos, showgrid=False)
+    fig.update_xaxes(title="Longitud de onda λ  [nm]", range=[315, 1250], showgrid=False)
+    fig.update_layout(
+        title=_titulo("¿Hasta dónde llega cada color?",
+                      "cada rayo baja por un corte de la celda hasta donde el silicio ya absorbió "
+                      "casi toda su luz"),
+        legend=dict(orientation="h", yanchor="top", y=-0.14, x=0, font=dict(size=10.5)),
+    )
+    return _base(fig, alto=580, margen_superior=78, margen_inferior=100)
+
+
+# ---------------------------------------------------------------------------
+# Dónde nacen los pares y qué les pasa
+# ---------------------------------------------------------------------------
+
+def _fondos_de_region(fig, union, W_um, x_min_um, etiquetas=True, sub=None):
+    x_n = float(cm_a_um(union.x_n))
+    x_p = float(cm_a_um(union.x_p))
+    sub = sub or {}
+    for x0, x1, color, opacidad, texto in (
+        (x_min_um, x_n, C_EMISOR, 0.12, "Emisor n" + sub.get("emisor", "")),
+        (x_n, x_p, C_DEPLECION, 0.35, None),
+        (x_p, W_um, C_BASE, 0.10, "Base p" + sub.get("base", "")),
+    ):
+        if x1 <= x0:
+            continue
+        fig.add_vrect(x0=x0, x1=x1, fillcolor=color, opacity=opacidad, line_width=0,
+                      layer="below")
+        if etiquetas and texto:
+            fig.add_annotation(x=np.log10(np.sqrt(x0 * x1)), y=1.0, yref="paper", text=texto,
+                               showarrow=False, yanchor="bottom", font=dict(color=TINTA, size=11))
+    if etiquetas:
+        fig.add_annotation(x=np.log10(0.5 * (x_n + x_p)), y=0.97, yref="paper",
+                           text="zona de depleción<br>(juntura p-n)", showarrow=False,
+                           yanchor="top", xanchor="right", xshift=-4,
+                           font=dict(color=C_DEPLECION, size=10.5),
+                           bgcolor="rgba(13,19,28,0.7)")
+
+
+def generacion_por_destino(x_cm, g, destinos, union, W_um, titulo, unidad, y_max=None):
+    """
+    La tasa de generación a cada profundidad, repartida según el destino del par.
+
+    La altura total de la curva en cada punto es la tasa de generación G(x) del
+    enunciado. Esa altura se divide en tres bandas con las probabilidades de destino
+    de un par nacido ahí: la verde son los pares que llegarán a la juntura y se
+    convertirán en corriente; las otras dos, los que se recombinarán antes.
+    """
+    x_um = cm_a_um(x_cm)
+    m = x_um >= 1e-3
+    xs = x_um[m]
+    partes = (
+        (g * destinos.fc, "Llegan a la juntura: producen corriente", C_JUNTURA),
+        (g * destinos.p_volumen, "Se recombinan en el volumen", C_VOLUMEN),
+        (g * destinos.p_superficie, "Mueren en una superficie", C_SUPERFICIE),
+    )
+    total = float(np.trapezoid(g, x_cm))
+
+    fig = go.Figure()
+    for y, nombre, color in partes:
+        frac = float(np.trapezoid(y, x_cm)) / total if total > 0 else 0.0
+        fig.add_trace(go.Scatter(
+            x=xs, y=y[m], mode="lines", stackgroup="g",
+            name=f"{nombre} · {_coma(100 * frac, 1)} % de los pares",
+            line=dict(width=0.6, color=color), fillcolor=_rgba(color, 0.62),
+            hovertemplate="x = %{x:.3g} µm<br>%{y:.3e} " + unidad + "<extra>" + nombre + "</extra>",
+        ))
+    _fondos_de_region(fig, union, W_um, float(xs[0]))
+
+    fig.update_xaxes(title="Profundidad desde la superficie  [µm, escala logarítmica]",
+                     type="log", range=[np.log10(xs[0]), np.log10(W_um)])
+    fig.update_yaxes(title=f"Tasa de generación  [{unidad}]",
+                     range=[0, y_max] if y_max else None, exponentformat="power")
+    fig.update_layout(
+        title=_titulo(titulo, "altura total: la tasa de generación G(x); cada banda, los pares "
+                              "nacidos a esa profundidad que terminan en cada destino"),
+        legend=dict(orientation="h", yanchor="top", y=-0.2, x=0, font=dict(size=10.5)),
+    )
+    return _base(fig, alto=470, margen_superior=84, margen_inferior=104)
+
+
+def destino_segun_profundidad(x_cm, destinos, union, W_um, tr, marca_um=None, marca_texto=None):
+    """
+    De cada cien pares nacidos a una profundidad, cuántos terminan en cada destino.
+
+    El borde superior de la banda verde es la probabilidad de colección f_c(x) del
+    enunciado. Las otras dos bandas la completan: lo que le falta a la colección
+    para llegar a cien se reparte entre la superficie más cercana y el volumen.
+    """
+    x_um = cm_a_um(x_cm)
+    m = x_um >= 1e-3
+    xs = x_um[m]
+    fig = go.Figure()
+    for y, nombre, color in (
+        (destinos.fc, "Llega a la juntura", C_JUNTURA),
+        (destinos.p_volumen, "Se recombina en el volumen", C_VOLUMEN),
+        (destinos.p_superficie, "Muere en la superficie más cercana", C_SUPERFICIE),
     ):
         fig.add_trace(go.Scatter(
-            x=balance["lambda_nm"], y=balance[clave], mode="lines", name=etiqueta,
-            stackgroup="uno", line=dict(width=0.5, color=color), fillcolor=color,
-            hovertemplate="λ = %{x:.0f} nm<br>%{y:.3f}<extra>" + etiqueta + "</extra>",
+            x=xs, y=100 * y[m], mode="lines", stackgroup="p", name=nombre,
+            line=dict(width=0.6, color=color), fillcolor=_rgba(color, 0.62),
+            hovertemplate="nacido a %{x:.3g} µm<br>%{y:.1f} de cada 100<extra>" + nombre + "</extra>",
         ))
-    if lambda_marcada is not None:
-        fig.add_vline(x=lambda_marcada, line=dict(color=TINTA, width=1.5, dash="dot"))
-
-    fig.update_xaxes(title="Longitud de onda λ  [nm]")
-    fig.update_yaxes(title="Fracción de los fotones incidentes", range=[0, 1])
-    fig.update_layout(
-        title=_titulo("Destino de cada fotón",
-                      "las tres franjas deben llenar exactamente la altura 1: es la verificación V1"),
-        legend=dict(orientation="h", y=-0.26, x=0, font=dict(size=10.5)),
-    )
-    return _base(fig, alto=400, margen_superior=58)
-
-
-def espectro_y_absorcion(lambda_nm, nph, alpha, lambda_marcada=None):
-    """Flujo de fotones disponible y coeficiente de absorción en ejes separados."""
-    fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=lambda_nm, y=nph, mode="lines", name="Fotones que llegan del Sol",
-        line=dict(color=BASE, width=2),
-        hovertemplate="λ = %{x:.0f} nm<br>%{y:.3e} fotones/(cm²·s·nm)<extra></extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        x=lambda_nm, y=alpha, mode="lines", name="Cuánto absorbe el silicio (α)",
-        line=dict(color=ACENTO, width=2), yaxis="y2",
-        hovertemplate="λ = %{x:.0f} nm<br>α = %{y:.3e} 1/cm<extra></extra>",
-    ))
-    if lambda_marcada is not None:
-        fig.add_vline(x=lambda_marcada, line=dict(color=TINTA, width=1.5, dash="dot"))
+        x=xs, y=100 * destinos.fc[m], mode="lines", name="Probabilidad de colección f_c(x)",
+        line=dict(color=TINTA, width=2), hoverinfo="skip"))
 
-    fig.update_xaxes(title="Longitud de onda λ  [nm]")
-    fig.update_yaxes(title="Flujo  [fotones / cm²·s·nm]")
+    _fondos_de_region(fig, union, W_um, float(xs[0]), sub={
+        "emisor": f" · L_p = {_profundidad_texto(cm_a_um(tr.L_p))}",
+        "base": f" · L_n = {_profundidad_texto(cm_a_um(tr.L_n))}",
+    })
+    if marca_um is not None and np.isfinite(marca_um):
+        fig.add_vline(x=marca_um, line=dict(color=ACENTO, width=1.6, dash="dot"))
+        fig.add_annotation(x=np.log10(marca_um), y=0.06, yref="paper", text=marca_texto,
+                           showarrow=False, xanchor="left", xshift=5,
+                           font=dict(color=ACENTO, size=11), bgcolor="rgba(13,19,28,0.65)")
+
+    fig.update_xaxes(title="Profundidad a la que nació el par  [µm, escala logarítmica]",
+                     type="log", range=[np.log10(xs[0]), np.log10(W_um)])
+    fig.update_yaxes(title="Destino de cada 100 pares nacidos ahí", range=[0, 100.5])
     fig.update_layout(
-        yaxis2=dict(title="α  [1/cm]", overlaying="y", side="right", type="log",
-                    gridcolor="rgba(0,0,0,0)", title_standoff=10),
-        title=_titulo("Lo que llega del Sol y cuánto lo absorbe el silicio",
-                      "donde más fotones hay, el silicio ya casi no absorbe: ése es su límite"),
-        legend=dict(orientation="h", y=-0.26, x=0, font=dict(size=10.5)),
-        margin=dict(r=58),
+        title=_titulo("Si un par nace a esta profundidad, ¿qué le pasa?",
+                      "de cada 100 pares nacidos en cada punto: cuántos llegan a la juntura, "
+                      "cuántos se recombinan en el volumen y cuántos mueren en una superficie"),
+        legend=dict(orientation="h", yanchor="top", y=-0.2, x=0, font=dict(size=10.5)),
     )
-    return _base(fig, alto=400, margen_superior=58)
+    return _base(fig, alto=470, margen_superior=84, margen_inferior=104)

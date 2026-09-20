@@ -269,9 +269,9 @@ def chequeo_coleccion_acotada() -> Verificacion:
     )
 
 
-def chequeo_coleccion_unitaria_en_deplexion() -> Verificacion:
+def chequeo_coleccion_unitaria_en_deplecion() -> Verificacion:
     """
-    En los bordes de la zona de deplexion la coleccion vale exactamente 1.
+    En los bordes de la zona de deplecion la coleccion vale exactamente 1.
 
     Ahi el campo electrico separa el par antes de que pueda recombinarse. Es el
     empalme de las tres ramas del modelo: si no da 1, o la formula esta mal, o la
@@ -283,13 +283,13 @@ def chequeo_coleccion_unitaria_en_deplexion() -> Verificacion:
     peor = max(abs(fc[i_n] - 1.0), abs(fc[i_p] - 1.0))
     return Verificacion(
         codigo="C-T2",
-        nombre="Coleccion unitaria en los bordes de la deplexion",
+        nombre="Coleccion unitaria en los bordes de la deplecion",
         calculado=1.0 + peor,
         referencia=1.0,
         unidad="-",
         tolerancia_rel=1e-9,
         nota=("Verifica de paso que la grilla tiene nodos exactamente en los "
-              "bordes de la zona de deplexion."),
+              "bordes de la zona de deplecion."),
     )
 
 
@@ -305,11 +305,15 @@ def _celda_por_defecto():
     t_k = celsius_a_kelvin(e["T_c"])
     union = juntura(d_n, e["NA"], e["ND"], t_k)
     campo = campo_optico(d_n, W_p, e["reflector_trasero"], 1.0,
-                         np.linspace(union.x_n, union.x_p, 12))
+                         np.linspace(union.x_n, union.x_p, 12),
+                         reflectancia_fija=config.reflectancia_fija_de(e))
     tr = transporte(e["mu_p"], e["tau_p_us"] * 1e-6, e["mu_n"],
                     e["tau_n_us"] * 1e-6, e["S_f"], e["S_r"], t_k)
-    fc = probabilidad_coleccion(campo.x_cm, union, d_n + W_p, tr)
-    return campo, fc
+    from physics.quantum_efficiency import coleccion_de_celda, generar_sectores
+    sectores = generar_sectores(config.N_SECTORES, e["tau_n_us"] * 1e-6, e["S_f"],
+                                e["dispersion_sectores"])
+    fc, _ = coleccion_de_celda(campo, union, d_n + W_p, tr, sectores)
+    return campo, union, fc
 
 
 def v5_cota_eficiencia_cuantica() -> Verificacion:
@@ -323,7 +327,7 @@ def v5_cota_eficiencia_cuantica() -> Verificacion:
     """
     from physics.quantum_efficiency import cota_superior, eficiencia_cuantica
 
-    campo, fc = _celda_por_defecto()
+    campo, _, fc = _celda_por_defecto()
     eqe, _ = eficiencia_cuantica(campo, fc)
     cota = cota_superior(campo)
     exceso = float(np.max(eqe - cota))
@@ -352,7 +356,7 @@ def c_t3_consistencia_corriente() -> Verificacion:
     from physics.optics import fracciones_por_region
     from physics.quantum_efficiency import corriente_de_cortocircuito, eficiencia_cuantica
 
-    campo, fc = _celda_por_defecto()
+    campo, _, fc = _celda_por_defecto()
     eqe, _ = eficiencia_cuantica(campo, fc)
     via_eqe = corriente_de_cortocircuito(campo, eqe)
     fr = fracciones_por_region(campo)
@@ -369,12 +373,16 @@ def c_t3_consistencia_corriente() -> Verificacion:
     )
 
 
-def _celda_electrica(t_c=None, s_f=None, ancho_dedo_cm=None):
+def _celda_electrica(t_c=None, s_f=None, ancho_dedo_cm=None, dispersion=None):
     """
     Cadena completa hasta la corriente fotogenerada y la de saturacion.
 
     Permite variar temperatura, pasivacion o geometria de la malla sin repetir el
     montaje, que es lo que necesitan V6 y V7.
+
+    La coleccion es la de la celda promediada sobre sus sectores, igual que en la
+    Pestaña 3, con la variacion de fabricacion del estado inicial salvo que se pida
+    otra. Asi las cifras certificadas son las que muestra la aplicacion (D-41).
     """
     from physics.collection import probabilidad_coleccion, transporte
     from physics.diode import corriente_saturacion
@@ -389,11 +397,16 @@ def _celda_electrica(t_c=None, s_f=None, ancho_dedo_cm=None):
     d_n, W_p = um_a_cm(e["d_n_um"]), um_a_cm(e["W_p_um"])
     union = juntura(d_n, e["NA"], e["ND"], t_k)
     campo = campo_optico(d_n, W_p, e["reflector_trasero"], 1.0,
-                         np.linspace(union.x_n, union.x_p, 12))
+                         np.linspace(union.x_n, union.x_p, 12),
+                         reflectancia_fija=config.reflectancia_fija_de(e))
     tr = transporte(e["mu_p"], e["tau_p_us"] * 1e-6, e["mu_n"],
                     e["tau_n_us"] * 1e-6,
                     e["S_f"] if s_f is None else s_f, e["S_r"], t_k)
-    fc = probabilidad_coleccion(campo.x_cm, union, d_n + W_p, tr)
+    from physics.quantum_efficiency import coleccion_de_celda, generar_sectores
+    sectores = generar_sectores(config.N_SECTORES, e["tau_n_us"] * 1e-6,
+                                e["S_f"] if s_f is None else s_f,
+                                e["dispersion_sectores"] if dispersion is None else dispersion)
+    fc, _ = coleccion_de_celda(campo, union, d_n + W_p, tr, sectores)
     eqe, _ = eficiencia_cuantica(campo, fc)
     j_l = corriente_de_cortocircuito(campo, eqe)
     j0, _, _ = corriente_saturacion(e["NA"], e["ND"], tr, t_k,
@@ -628,8 +641,9 @@ def c_t6_pestanas_coherentes() -> Verificacion:
     from physics.optics import campo_optico
     from physics.quantum_efficiency import (corriente_de_cortocircuito,
                                             eficiencia_cuantica, generar_sectores)
-    from physics.sectors import (Defectos, armar_celda, curva_global,
-                                 parametros_de_curva)
+    from physics.defectos import sin_fallas
+    from physics.front_grid import malla
+    from physics.sectors import armar_celda, curva_global, parametros_de_curva
     from units import celsius_a_kelvin, um_a_cm
 
     e = config.ESTADO_INICIAL
@@ -638,17 +652,20 @@ def c_t6_pestanas_coherentes() -> Verificacion:
     W = d_n + W_p
     union = juntura(d_n, e["NA"], e["ND"], t_k)
     campo = campo_optico(d_n, W_p, e["reflector_trasero"], 1.0,
-                         np.linspace(max(union.x_n, 0.0), union.x_p, 12))
+                         np.linspace(max(union.x_n, 0.0), union.x_p, 12),
+                         reflectancia_fija=config.reflectancia_fija_de(e))
     tr = transporte(e["mu_p"], e["tau_p_us"] * 1e-6, e["mu_n"],
                     e["tau_n_us"] * 1e-6, e["S_f"], e["S_r"], t_k)
 
-    j_l, j0, grid, _ = _celda_electrica()
+    j_l, j0, grid, _ = _celda_electrica(dispersion=0.0)
     escalar = curva_iv(j0, j_l * (1.0 - grid.fraccion_sombra),
                        e["R_s"] + grid.r_serie, e["R_p"], e["n_idealidad"], t_k)
 
     sectores = generar_sectores(config.N_SECTORES, e["tau_n_us"] * 1e-6, e["S_f"], 0.0)
-    celda = armar_celda(campo, union, W, tr, sectores, Defectos(), e["n_dedos"],
-                        e["ancho_dedo_um"] * 1e-4, e["R_s"], e["NA"], e["ND"], t_k)
+    grid_sectores = malla(e["n_dedos"], e["ancho_dedo_um"] * 1e-4)
+    celda = armar_celda(campo, union, W, tr, sectores,
+                        sin_fallas(sectores.n, e["R_s"] + grid_sectores.r_serie),
+                        grid_sectores.fraccion_sombra, e["NA"], e["ND"], t_k)
     v, j, v_oc = curva_global(celda, e["R_p"], e["n_idealidad"], t_k)
     por_sectores = parametros_de_curva(v, j, C.IRRADIANCE_1SUN, v_oc)
 
@@ -677,7 +694,8 @@ def _celda_con_dispersion(dispersion):
     W = d_n + W_p
     union = juntura(d_n, e["NA"], e["ND"], t_k)
     campo = campo_optico(d_n, W_p, e["reflector_trasero"], 1.0,
-                         np.linspace(max(union.x_n, 0.0), union.x_p, 12))
+                         np.linspace(max(union.x_n, 0.0), union.x_p, 12),
+                         reflectancia_fija=config.reflectancia_fija_de(e))
     tr = transporte(e["mu_p"], e["tau_p_us"] * 1e-6, e["mu_n"],
                     e["tau_n_us"] * 1e-6, e["S_f"], e["S_r"], t_k)
     sectores = generar_sectores(config.N_SECTORES, e["tau_n_us"] * 1e-6,
@@ -736,8 +754,8 @@ def c_t8_pestanas_coherentes_con_dispersion() -> Verificacion:
     from physics.front_grid import malla
     from physics.quantum_efficiency import (corriente_de_cortocircuito,
                                             eficiencia_cuantica)
-    from physics.sectors import (Defectos, armar_celda, curva_global,
-                                 parametros_de_curva)
+    from physics.defectos import sin_fallas
+    from physics.sectors import armar_celda, curva_global, parametros_de_curva
 
     e = config.ESTADO_INICIAL
     campo, union, tr, W, t_k, sectores, fc_celda, _ = _celda_con_dispersion(0.30)
@@ -751,8 +769,9 @@ def c_t8_pestanas_coherentes_con_dispersion() -> Verificacion:
                        e["R_s"] + grid.r_serie, e["R_p"], e["n_idealidad"], t_k)
 
     # Via de la Pestaña 4: los mismos sectores resueltos en paralelo, sin defectos.
-    celda = armar_celda(campo, union, W, tr, sectores, Defectos(), e["n_dedos"],
-                        e["ancho_dedo_um"] * 1e-4, e["R_s"], e["NA"], e["ND"], t_k)
+    celda = armar_celda(campo, union, W, tr, sectores,
+                        sin_fallas(sectores.n, e["R_s"] + grid.r_serie),
+                        grid.fraccion_sombra, e["NA"], e["ND"], t_k)
     v, j, v_oc = curva_global(celda, e["R_p"], e["n_idealidad"], t_k)
     por_sectores = parametros_de_curva(v, j, C.IRRADIANCE_1SUN, v_oc)
 
@@ -769,13 +788,62 @@ def c_t8_pestanas_coherentes_con_dispersion() -> Verificacion:
     )
 
 
+def c_t9_reparto_completo_del_foton() -> Verificacion:
+    """
+    C-T9 - Todos los destinos de un fotón suman exactamente uno, en cada color.
+
+    Es la verificación V1 llevada hasta el final. V1 comprueba que lo reflejado,
+    lo absorbido y lo transmitido cierren. Ésta comprueba además que el reparto de
+    lo absorbido entre emisor, zona de depleción y base, y dentro de cada región
+    entre lo que llega a la juntura, lo que muere en una superficie y lo que se
+    recombina en el volumen, sea consistente con las probabilidades de destino.
+
+    Tiene más fuerza de la que parece. Los pares que nacen en la zona de depleción
+    aparecen en un solo destino, el de colectados, porque ahí la colección vale
+    uno. Si dejara de valer uno, o si las tres probabilidades de destino no
+    sumaran uno en algún punto, faltaría masa y la suma no cerraría.
+
+    La tolerancia es diez veces más estrecha que la de V1 porque aquí no hay
+    cancelación posible entre términos: el único error admisible es el de la
+    grilla resolviendo la absorción.
+    """
+    from physics.collection import probabilidades_de_destino, reparto_por_destino
+
+    campo, union, fc = _celda_por_defecto()
+    e = config.ESTADO_INICIAL
+    from physics.collection import transporte
+    from units import celsius_a_kelvin
+    tr = transporte(e["mu_p"], e["tau_p_us"] * 1e-6, e["mu_n"], e["tau_n_us"] * 1e-6,
+                    e["S_f"], e["S_r"], celsius_a_kelvin(e["T_c"]))
+    from physics.quantum_efficiency import destinos_de_celda, generar_sectores
+    sectores = generar_sectores(config.N_SECTORES, e["tau_n_us"] * 1e-6, e["S_f"],
+                                e["dispersion_sectores"])
+    destinos = destinos_de_celda(campo, union, campo.W_cm, tr, sectores)
+    reparto = reparto_por_destino(campo, destinos, union)
+    peor = float(np.max(np.abs(reparto.suma_espectral - 1.0)))
+    return Verificacion(
+        codigo="C-T9",
+        nombre="Todos los destinos del foton suman uno",
+        calculado=1.0 + peor,
+        referencia=1.0,
+        unidad="-",
+        tolerancia_rel=1e-3,
+        nota=(f"Diez destinos evaluados en las {campo.lambda_nm.size} longitudes de onda "
+              f"del rango 300-1200 nm. La corriente que sale de sumar los tres destinos "
+              f"que producen carga es {1e3 * reparto.j_sc:.4f} mA/cm2, sobre un techo "
+              f"absoluto de {1e3 * reparto.j_maxima:.2f} mA/cm2 si cada foton "
+              f"incidente diera un par colectado."),
+    )
+
+
 # V2 del enunciado combina dos criterios de naturaleza distinta -una banda de
 # tolerancia en el azul y un umbral en el infrarrojo-, asi que se reporta como
 # dos entradas: V2a y V2b, implementadas arriba.
 VERIFICACIONES_ENUNCIADO = (
     v1_balance_de_fotones,
+    c_t9_reparto_completo_del_foton,
     chequeo_coleccion_acotada,
-    chequeo_coleccion_unitaria_en_deplexion,
+    chequeo_coleccion_unitaria_en_deplecion,
     v5_cota_eficiencia_cuantica,
     c_t3_consistencia_corriente,
     v3_consistencia_optica_electrica,

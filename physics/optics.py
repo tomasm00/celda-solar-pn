@@ -48,7 +48,7 @@ def grilla_profundidad(d_n_cm, W_p_cm, nodos_extra=()):
     aparece exactamente una vez, lo que permite separar limpiamente emisor y base.
 
     `nodos_extra` fuerza nodos en profundidades concretas. Se usa para los bordes
-    de la zona de deplexión: ahí la probabilidad de colección tiene un quiebre
+    de la zona de depleción: ahí la probabilidad de colección tiene un quiebre
     (cambia de rama), y sin un nodo exactamente en el borde la discretización se
     lo salta y el valor unitario que debe tener en el borde no aparece.
     """
@@ -75,6 +75,12 @@ class CampoOptico:
     d_n_cm: float
     W_cm: float
     reflector: bool
+    reflectancia_fija: float | None = None
+
+    @property
+    def R_trasera(self) -> float:
+        """Reflectancia del contacto trasero vista desde el silicio."""
+        return C.R_CONTACTO_AL if self.reflector else 0.0
 
     @property
     def indice_juntura(self) -> int:
@@ -90,26 +96,44 @@ class CampoOptico:
         return self.G[:, i]
 
 
-def _atenuacion(x_cm, alpha, W_cm, reflector):
+def _factor_de_rebotes(alpha, W_cm, R_frontal, R_trasera):
+    """
+    Cuánto se multiplica la luz dentro de la celda por los rebotes sucesivos.
+
+    Con reflector, la luz que vuelve del aluminio llega a la cara frontal, y ahí
+    una fracción R vuelve a reflejarse hacia adentro —la misma interfaz, vista
+    desde el otro lado, refleja lo mismo a incidencia normal—. Ese haz hace otro
+    viaje de ida y vuelta, y así sucesivamente. Cada ciclo completo multiplica la
+    intensidad por R_frontal · R_trasera · e^{-2 alpha W}, así que la suma de todos
+    los ciclos es una serie geométrica cuya suma exacta es el inverso de uno menos
+    ese producto.
+
+    Sin reflector el producto es cero y el factor vale exactamente uno.
+    """
+    ciclo = R_frontal * R_trasera * np.exp(-2.0 * alpha * W_cm)
+    return 1.0 / (1.0 - ciclo)
+
+
+def _atenuacion(x_cm, alpha, W_cm, R_frontal, R_trasera):
     """
     Factor de atenuación del flujo dentro del silicio, adimensional.
 
-    Un solo paso: e^{-alpha x}.
+    Sin reflector: un solo paso, e^{-alpha x}.
 
-    Con reflector trasero activo se suma el haz de retorno: la luz que llegó al
-    fondo con e^{-alpha W}, se reflejó con R_Al, y volvió a recorrer W - x, lo que
-    da R_Al * e^{-alpha (2W - x)}. Decisión D-06: apagado por defecto, para que la
-    eficiencia cuántica sea la fórmula de un solo paso del enunciado.
+    Con reflector: en cada punto se suman el haz que baja y el que sube tras
+    rebotar en el aluminio, R_Al · e^{-alpha (2W - x)}, y los dos se multiplican
+    por el factor de rebotes sucesivos. Decisión D-06 (reflector apagado por
+    defecto) y D-32 (serie completa de rebotes en lugar de solo dos pasos).
     """
     ida = np.exp(-np.outer(x_cm, alpha))
-    if not reflector:
+    if R_trasera <= 0.0:
         return ida
-    vuelta = C.R_CONTACTO_AL * np.exp(-np.outer(2.0 * W_cm - x_cm, alpha))
-    return ida + vuelta
+    vuelta = R_trasera * np.exp(-np.outer(2.0 * W_cm - x_cm, alpha))
+    return (ida + vuelta) * _factor_de_rebotes(alpha, W_cm, R_frontal, R_trasera)
 
 
 def campo_optico(d_n_cm, W_p_cm, reflector=False, irradiancia_soles=1.0,
-                 nodos_extra=()):
+                 nodos_extra=(), reflectancia_fija=None):
     """
     Resuelve la óptica completa de la celda.
 
@@ -118,27 +142,36 @@ def campo_optico(d_n_cm, W_p_cm, reflector=False, irradiancia_soles=1.0,
     agotamiento respecto de x: G = alpha * Nph * (1-R) * e^{-alpha x}
     (U2, lámina 36).
 
+    `reflectancia_fija` reemplaza la reflectancia medida del silicio desnudo por
+    un valor constante, que es el segundo modo de reflexión frontal que exige el
+    enunciado para la Pestaña 1. Con None se usa la medida de Green (2008).
+
     `nodos_extra` se propaga a la grilla. Óptica y colección tienen que compartir
-    exactamente la misma grilla, porque la eficiencia cuántica del Hito 4 integra
-    el producto de ambas.
+    exactamente la misma grilla, porque la eficiencia cuántica integra el producto
+    de ambas.
     """
     optica = constantes_opticas_silicio()
     espectro = espectro_am15g()
 
     lam = optica["lambda_nm"]
     alpha = optica["alpha"]
-    reflectancia = optica["R"]
+    if reflectancia_fija is None:
+        reflectancia = optica["R"]
+    else:
+        reflectancia = np.full_like(lam, float(reflectancia_fija), dtype=float)
     nph = np.interp(lam, espectro["lambda_nm"], espectro["Nph"]) * irradiancia_soles
 
     x = grilla_profundidad(d_n_cm, W_p_cm, nodos_extra)
     W = d_n_cm + W_p_cm
+    R_trasera = C.R_CONTACTO_AL if reflector else 0.0
 
     flujo_que_entra = nph * (1.0 - reflectancia)          # (nl,)
-    G = alpha * flujo_que_entra * _atenuacion(x, alpha, W, reflector)
+    G = alpha * flujo_que_entra * _atenuacion(x, alpha, W, reflectancia, R_trasera)
 
     return CampoOptico(
         x_cm=x, lambda_nm=lam, alpha=alpha, R=reflectancia, Nph=nph,
         G=G, d_n_cm=d_n_cm, W_cm=W, reflector=reflector,
+        reflectancia_fija=reflectancia_fija,
     )
 
 
@@ -146,29 +179,33 @@ def balance_fotones(campo: CampoOptico):
     """
     Reparto de los fotones incidentes, color por color. Verificación V1.
 
-    Tres destinos posibles en el modelo de un solo paso:
-      reflejada   : rebota en la superficie frontal, nunca entra
-      absorbida   : integral numérica de la generación sobre el espesor
-      transmitida : llega al contacto trasero sin haber sido absorbida
+    Destinos posibles:
+      reflejada      : rebota en la superficie frontal, nunca entra
+      absorbida      : integral numérica de la generación sobre el espesor
+      aluminio       : llega al contacto trasero y el metal la absorbe
+      escapa_frente  : con reflector, vuelve del aluminio y sale por el frente
+      transmitida    : aluminio + escapa_frente, lo que deja la celda sin generar
 
     La fracción absorbida se obtiene integrando G sobre la grilla, no con la
     fórmula cerrada. Así V1 mide de verdad si la discretización resuelve la
-    absorción, que es su función como test (decisión D-03).
+    absorción, que es su función como test (decisión D-03). Las otras dos salen
+    de sumar la serie de rebotes (D-32); sin reflector se reducen a que todo lo
+    que llega al fondo lo absorbe el aluminio.
     """
     absorbida = np.trapezoid(campo.G, campo.x_cm, axis=0) / campo.Nph
-    transmitida = (1.0 - campo.R) * np.exp(-campo.alpha * campo.W_cm)
-    if campo.reflector:
-        # Con reflector, lo que "escapa" es lo que el aluminio no devuelve, mas
-        # lo que sale por el frente tras el segundo paso.
-        llega_al_fondo = (1.0 - campo.R) * np.exp(-campo.alpha * campo.W_cm)
-        transmitida = llega_al_fondo * (1.0 - C.R_CONTACTO_AL)
-        vuelve_al_frente = (llega_al_fondo * C.R_CONTACTO_AL
-                            * np.exp(-campo.alpha * campo.W_cm))
-        transmitida = transmitida + vuelve_al_frente
+    entra = 1.0 - campo.R
+    llega = np.exp(-campo.alpha * campo.W_cm)
+    rebotes = _factor_de_rebotes(campo.alpha, campo.W_cm, campo.R, campo.R_trasera)
+
+    aluminio = entra * llega * (1.0 - campo.R_trasera) * rebotes
+    escapa_frente = entra * campo.R_trasera * llega ** 2 * (1.0 - campo.R) * rebotes
+    transmitida = aluminio + escapa_frente
     return {
         "lambda_nm": campo.lambda_nm,
         "reflejada": campo.R,
         "absorbida": absorbida,
+        "aluminio": aluminio,
+        "escapa_frente": escapa_frente,
         "transmitida": transmitida,
         "suma": campo.R + absorbida + transmitida,
     }

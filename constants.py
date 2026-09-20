@@ -46,6 +46,25 @@ MU_N = 1200.0                # cm2/(V*s)   electrones en base tipo p, NA ~ 1e16 
 MU_P = 60.0                  # cm2/(V*s)   huecos en emisor tipo n+, ND ~ 1e19-1e20 (Anexo B, U3)
 
 # ---------------------------------------------------------------------------
+# Recombinacion intrinseca del silicio
+#
+# La Unidad 2 (lamina 25) descompone la recombinacion en el volumen en tres
+# mecanismos que se suman como tasas: radiativa, Auger y SRH. Los dos primeros
+# son intrinsecos: ocurren incluso en un cristal perfecto, y su intensidad solo
+# depende del dopaje. Por eso fijan un techo a la vida media que ningun material
+# con ese dopaje puede superar. Se usan para vigilar que los tiempos de vida que
+# el usuario elige sean fisicamente posibles (monitor en vivo) y para repartir la
+# recombinacion en el volumen entre los tres mecanismos.
+#
+# El Anexo B entrega solo la suma cn + cp. Para el minoritario en material dopado
+# interviene uno solo de los dos coeficientes, asi que usar la suma da un techo
+# algo mas bajo que el real; el orden de magnitud no cambia (ver D-33).
+# ---------------------------------------------------------------------------
+
+B_RADIATIVO = 4.73e-15       # cm3/s       coeficiente radiativo del silicio (Anexo B, U4)
+C_AUGER = 4.0e-31            # cm6/s       coeficiente de Auger, cn + cp (Anexo B, U4)
+
+# ---------------------------------------------------------------------------
 # Condiciones de referencia
 # ---------------------------------------------------------------------------
 

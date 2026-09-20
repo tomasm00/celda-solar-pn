@@ -236,6 +236,8 @@ Lista para la sección de límites del reporte y de la presentación.
 | Sin recombinación dentro de la zona de deplexión | Simplificación | — |
 | Movilidades fijas | Ver D-09 | — |
 | Estadística de Boltzmann | Violado en el emisor | Acotado en D-05 |
+| Constantes ópticas medidas a 300 K usadas a la temperatura de operación | Simplificación | Green (2008) entrega coeficientes de temperatura que no se aplican; cerca de la banda prohibida la absorción real crece con la temperatura, así que a 45 °C el modelo subestima levemente la absorción del infrarrojo |
+| Sin recombinación radiativa ni de Auger explícitas | **Limitación declarada** | τ_n y τ_p son vidas efectivas; con N_D = 6×10¹⁹ el τ_p elegido supera el techo que impone Auger y la colección en el emisor queda sobreestimada. Ver D-33 |
 
 ---
 
@@ -452,3 +454,640 @@ Dos detalles de construcción, ambos por la misma razón que D-29:
 - Se usan **dos canales**, porque son dos preguntas distintas: la altura, normalizada color a
   color, dice *dónde* nace la corriente de ese color; el color de la superficie dice *cuánto*
   aporta ese color al total.
+
+---
+
+## D-31 · El reparto de los fotones por destino sustituye a los dos mapas de calor — [FIGURA NUEVA, DOS RETIRADAS]
+
+**Qué se observó.** Los dos mapas de la Pestaña 1 —el plano de D-29 y el relieve de D-30—
+seguían sin comunicar nada utilizable. El diagnóstico de D-29 era correcto y la corrección
+funcionó, pero resolvió el problema equivocado: normalizar cada color contra su propio máximo
+elimina el piso de la escala **y de paso elimina la magnitud**. Los dos mapas solo podían
+responder «hasta qué profundidad llega cada color», y esa pregunta ya la respondían la
+penetración por color y el acumulado espectral. Tres figuras de ocho compitiendo por lo mismo.
+
+Además, las dos necesitaban un párrafo debajo para entenderse, que es el criterio que este
+proyecto adoptó para declarar una figura fallida.
+
+**Qué se pone en su lugar.** El reparto de los fotones incidentes entre sus **siete destinos
+posibles**, en dos figuras que son la misma información a dos niveles de detalle:
+
+- Una **cascada**, integrada sobre todo el espectro: parte de la corriente que habría si cada
+  fotón del rango 300-1200 nm diera un par colectado —46,46 mA/cm² para esta celda— y va
+  restando pérdida por pérdida hasta la corriente fotogenerada. Reflexión −16,25, atraviesan
+  −5,72, se recombinan en el emisor −8,89, se recombinan en la base −0,56, quedan
+  **15,03 mA/cm²**.
+- El mismo reparto **color por color**, en franjas apiladas que llenan el 100 % en cada
+  longitud de onda. Las pérdidas van abajo y lo que produce corriente arriba, de modo que el
+  espesor del bloque superior es la eficiencia cuántica externa. Se comprobó: la frontera vale
+  exactamente 1 − EQE en todo el rango.
+
+**Por qué esto sí responde la pregunta del usuario.** Las magnitudes vuelven a ser legibles y
+cada franja tiene un culpable identificable. La reflexión la fija la ausencia de recubrimiento
+antirreflejo; lo que se recombina en el emisor, la recombinación superficial frontal; lo que
+atraviesa la celda, el espesor. Mover un deslizador y ver qué franja crece es la lectura que
+las figuras anteriores hacían imposible por construcción.
+
+**Dónde vive el cálculo.** En `physics/collection.py`, no en la capa de gráficos: es física, y
+la Pestaña 3 y las verificaciones tienen que poder consumirla. Devuelve las fracciones
+espectrales, las integradas, la corriente fotogenerada y el techo absoluto.
+
+**Detalle de implementación que importa.** Los tres tramos de integración —emisor, deplexión,
+base— **comparten sus extremos**, así que las tres integrales parciales suman exactamente la
+integral sobre toda la celda. Eso exige que la grilla traiga nodos forzados en los bordes de
+la deplexión, que es lo que ya hace `grilla_profundidad`.
+
+**Verificación asociada.** Ver C-T9.
+
+**Figuras de la Pestaña 1: de ocho a seis.** Salen el mapa plano, el relieve, el balance
+espectral —cuyo trabajo absorbe la figura nueva, mejor contado— y el acumulado espectral.
+Entran la cascada y el reparto por destino. Se conservan la celda tridimensional, el perfil de
+generación con colección, el perfil de probabilidad de colección y la penetración por color.
+
+---
+
+## C-T9 · Los siete destinos del fotón suman uno — [VALIDACIÓN NUEVA]
+
+Es la verificación V1 llevada hasta el final. V1 comprueba que lo reflejado, lo absorbido y lo
+transmitido cierren. C-T9 comprueba además que el reparto de lo absorbido entre emisor,
+deplexión y base, y dentro de cada región entre lo que se colecta y lo que se recombina, sea
+consistente con la probabilidad de colección.
+
+Tiene más fuerza de la que parece. Los pares que nacen en la zona de deplexión aparecen en un
+**solo** destino, el de colectados, porque ahí la probabilidad de colección vale uno. Si alguna
+vez dejara de valer uno haría falta un octavo destino y la suma no cerraría, así que C-T9
+vigila de paso el empalme de las tres ramas del modelo de colección.
+
+La tolerancia es diez veces más estrecha que la de V1 —0,1 % contra 1 %— porque aquí no hay
+cancelación posible entre términos: el único error admisible es el de la grilla resolviendo la
+absorción. Medido: **0,0040 %** sobre las 1001 longitudes de onda, y se mantiene por debajo de
+0,0045 % con el reflector encendido, con el emisor entre 0,2 y 10 µm, con la base entre 20 y
+300 µm y con la recombinación superficial frontal entre 10 y 10⁶ cm/s.
+
+Comprobado además, aunque no se reporta como verificación separada por ser exacto por
+construcción: la corriente que sale de sumar los tres destinos que producen carga coincide con
+la que sale de integrar la eficiencia cuántica **hasta la última cifra de la máquina**.
+
+Con C-T9 el proyecto pasa de veinte verificaciones a **veintiuna**.
+
+---
+
+## Revisión física completa de la Pestaña 1 (15 de septiembre de 2026)
+
+Antes de rehacer la pestaña se contrastó cada supuesto con el enunciado y con las Unidades 2 y 3, y
+se midió sobre el modelo. Las decisiones D-32 a D-39 salen de esa revisión.
+
+**Hallazgos que no requirieron cambiar el modelo**
+
+- *Grilla.* En los extremos de los controles (emisor de 0,2 a 10 µm, base hasta 300 µm) el primer
+  paso de la grilla mide entre 0,001 y 0,07 nm, frente a los 5,6 nm a los que muere el ultravioleta
+  de 300 nm. El paso más grueso de la base es 4,5 µm, frente a longitudes de difusión de decenas o
+  cientos de micras. Resuelve bien en todo el rango.
+- *Potencial de contacto y zona de depleción.* Contrastados a 45 °C: concentración intrínseca
+  4,13×10¹⁰ cm⁻³, potencial 0,956 V, ancho 0,176 µm, coherentes con las expresiones de la Unidad 2.
+- *La tabla del color «no cambiaba» con el reflector.* No era un error de cálculo: a 450 nm, el color
+  por defecto, el 90 % de la luz se absorbe antes de 0,95 µm y nada llega al fondo, así que el
+  reflector no tiene qué devolver. A 1000 nm la tabla sí cambiaba (lo que escapa pasaba de 34,9 % a
+  16,0 %). El defecto era de comunicación: la tabla no lo explicaba. Ahora lo dice.
+
+**Hallazgos que sí requirieron cambios:** D-32 a D-39. **Hallazgo que quedó como limitación
+declarada:** D-33.
+
+---
+
+## D-32 · El reflector trasero sumaba solo dos pasadas de la luz — [MODELO CORREGIDO]
+
+**Qué pasaba.** Con el reflector encendido, el modelo sumaba la luz que baja y la que vuelve del
+aluminio, y ahí se detenía. Pero la luz que vuelve llega a la cara frontal, y la misma interfaz
+aire-silicio que refleja el 30 % de la luz que entra desde afuera refleja lo mismo de la que llega
+desde adentro, a incidencia normal. Ese haz hace otro viaje, y otro.
+
+**Corrección.** Cada ciclo completo multiplica la intensidad por la reflectancia frontal, la trasera y
+la atenuación de ida y vuelta. La suma de todos los ciclos es una serie geométrica con suma exacta, así
+que la generación se multiplica por un factor cerrado, y el balance separa lo que absorbe el aluminio
+de lo que escapa por el frente. Sin reflector el factor vale exactamente uno: **las cifras
+certificadas de la semilla no cambian**.
+
+**Efecto medido con el reflector encendido.** La eficiencia cuántica a 1100 nm pasa de 3,92 % a
+5,31 %; a 1000 nm, de 41,5 % a 44,8 %. La corriente sube de 15,82 a 16,07 mA/cm² (+1,6 %).
+
+---
+
+## D-33 · Techo intrínseco de la vida media, y un tiempo de vida del emisor que no es físico — [VIGILANCIA NUEVA · LIMITACIÓN DECLARADA]
+
+**Base teórica.** La Unidad 2 (lámina 25) escribe la vida media en el volumen como la combinación de
+tres mecanismos que se suman como tasas: radiativo, Auger y SRH. Los dos primeros ocurren incluso en
+un cristal perfecto y dependen solo del dopaje, así que imponen un techo que ningún material con ese
+dopaje puede superar. Se calculan con los coeficientes del Anexo B: radiativo 4,73×10⁻¹⁵ cm³/s y
+Auger 4×10⁻³¹ cm⁶/s.
+
+El Anexo B entrega solo la suma de los dos coeficientes de Auger. Para un minoritario en material
+dopado interviene uno solo, así que usar la suma da un techo algo más bajo que el real. Con el
+coeficiente de electrones solo (2,8×10⁻³¹, valor de la literatura) el techo del emisor sería 1,0 ns
+en lugar de 0,69 ns: la conclusión no cambia.
+
+**Lo que se encontró.**
+
+| Región | Dopaje | Techo radiativo | Techo Auger | Techo total | Valor del control |
+|---|---|---|---|---|---|
+| Base | 4×10¹⁶ cm⁻³ | 5,3 ms | 1,6 ms | 1,2 ms | 30 µs · posible |
+| Emisor | 6×10¹⁹ cm⁻³ | 3,5 µs | 0,69 ns | 0,69 ns | 1 µs · **1440 veces por encima** |
+
+En la base el tiempo de vida de la semilla es perfectamente posible: leído como vida efectiva, el
+97,5 % de la recombinación en el volumen es SRH, el 1,9 % Auger y el 0,6 % radiativa. En el emisor no:
+con 6×10¹⁹ donantes por cm³, ni un cristal perfecto supera 0,69 ns, y el valor por defecto de 1 µs
+—que no viene de la semilla sino de una elección nuestra— es imposible. Más aún: **el mínimo del rango
+que fija el enunciado para τ_p, 0,1 µs, sigue estando 144 veces por encima del techo**. Ningún valor
+permitido del control es físico para el dopaje asignado.
+
+**Qué se hizo.** El modelo no se modificó. Se agregaron dos vigilancias al monitor en vivo (M-10 para
+el emisor, M-11 para la base) que avisan cuando la vida elegida supera el techo, y el reparto de la
+recombinación en el volumen entre los tres mecanismos solo se muestra cuando es físicamente posible.
+
+**Qué se evaluó.** Incorporar la recombinación radiativa y la de Auger al modelo, de modo que el
+control fuera la vida SRH y la vida efectiva se combinara con las dos intrínsecas como indica la
+lámina 25. Se calculó el efecto completo sobre la celda de la semilla:
+
+| Magnitud | Modelo actual | Con radiativa y Auger |
+|---|---|---|
+| Longitud de difusión del emisor | 12,8 µm | 0,34 µm |
+| Corriente de cortocircuito | 14,55 mA/cm² | 9,42 mA/cm² |
+| Voltaje de circuito abierto | 587,1 mV | 573,6 mV |
+| Eficiencia | 6,57 % | 4,10 % |
+| Eficiencia cuántica interna a 450 nm | 20,9 % | 0,0 % |
+| Coeficiente térmico del voltaje (V6) | −2,21 mV/°C | −2,25 mV/°C |
+
+Con el coeficiente de Auger propio de cada portador (literatura) en vez de la suma del Anexo B, las
+cifras cambian menos de 1 %.
+
+**Decisión: no se incorpora.** Queda como limitación declarada del modelo. Dos razones:
+
+- Con el emisor de 5 µm que fija el enunciado, Auger anula por completo la respuesta en el azul
+  para cualquier velocidad de recombinación frontal: la eficiencia cuántica interna a 450 nm vale
+  0 % con S_f de 10, de 2×10⁴ o de 10⁶ cm/s. Eso borra el comportamiento que el enunciado pide
+  reproducir (la respuesta en el azul dominada por la superficie frontal, lámina 30 de la Unidad 3)
+  y que anuncia como pregunta de la presentación. Con un emisor de 0,3 µm el comportamiento vuelve,
+  lo que explica por qué los emisores industriales son delgados.
+- Cambiaría todas las cifras reportadas y se apartaría del modelo simplificado que entrega el
+  enunciado, en el que τ_n y τ_p son vidas medias efectivas del portador minoritario.
+
+**Consecuencia que hay que declarar.** Con el dopaje asignado, la colección en el emisor está
+sobreestimada: el modelo le permite al hueco recorrer 12,8 µm cuando físicamente no alcanzaría a
+recorrer 0,4 µm. El monitor en vivo lo señala con la vigilancia M-10, que por eso aparece como aviso
+en el estado inicial de la aplicación, y la pestaña lo explica.
+
+---
+
+## D-34 · Destino de un par: juntura, superficie o volumen — [FÍSICA NUEVA]
+
+**Por qué.** La probabilidad de colección del enunciado dice cuántos pares llegan a la juntura, pero
+no qué les pasa a los demás. Para mostrar las pérdidas separadas por causa, que es lo que permite
+entender qué parámetro controla cada una, hacía falta repartir el resto.
+
+**Cómo.** La probabilidad de que un par muera en la superficie sale de la misma ecuación de difusión
+que el enunciado resuelve para la colección, con las condiciones de borde intercambiadas: vale cero en
+el borde de la zona de depleción, y la superficie pasa a ser el destino que se cuenta. Tiene solución
+cerrada con la misma estructura hiperbólica y se escribe en la misma forma estable. La probabilidad de
+recombinarse en el volumen es lo que falta para completar uno.
+
+**Verificación.** La solución cerrada se contrastó con una resolución independiente de la ecuación de
+difusión por diferencias finitas, con 4001 nodos: coincide hasta 10⁻⁹ en el emisor y en la base, tanto
+para la colección como para la captura superficial. La probabilidad de volumen nunca sale negativa, y
+las tres suman uno hasta la precisión de la máquina. El monitor lo vigila en vivo (M-05).
+
+**Consecuencia.** El reparto de fotones pasa de siete destinos a diez: tres pérdidas ópticas
+(reflexión, absorción en el aluminio, escape tras rebotar), cuatro de recombinación (superficie y
+volumen en cada región) y tres que producen corriente. C-T9 se actualizó a los diez destinos.
+
+---
+
+## D-35 · Un control de iluminación para toda la aplicación — [DISEÑO]
+
+Hasta ahora el modo de un solo color o espectro completo existía solo dentro de la animación 3D, y el
+resto de la Pestaña 1 mezclaba figuras de un color con cifras de todo el espectro. Se reemplaza por un
+único control en la barra lateral, que gobierna todas las vistas que lo admiten: el diagrama de
+recorrido, la animación, la tabla de destinos, el perfil de generación, el balance y el viaje del
+fotón. En modo espectro las cifras se expresan en mA/cm²; en modo de un color, como fracción de los
+fotones de ese color, que es su eficiencia cuántica externa.
+
+Por ahora lo usa la Pestaña 1. En las Pestañas 3 y 4 el modo de un color significa un ensayo I-V con
+luz monocromática, que cambia la definición de la corriente y de la eficiencia y toca V3 y V7; se
+incorpora al revisar esas pestañas. La Pestaña 2 es espectral por definición.
+
+---
+
+## D-36 · Reflexión frontal de valor fijo, como pide el enunciado — [REQUISITO FALTANTE]
+
+El enunciado lista entre los controles de la Pestaña 1 la reflexión frontal «de silicio desnudo o
+valor fijo». Solo existía la primera. Se agrega el modo de valor fijo, con un deslizador entre 0 y
+0,95 y valor inicial 0,30, el promedio del Anexo B. La interfaz frontal usa el mismo valor para la luz
+que intenta salir desde adentro, coherente con D-32.
+
+Es una propiedad de la celda, no de la vista, así que llega a las cuatro pestañas de contenido y a las
+verificaciones, incluidas sus claves de caché (D-22).
+
+---
+
+## D-37 · La Pestaña 1 describe la misma celda que las Pestañas 2, 3 y 4 — [INCONSISTENCIA CORREGIDA]
+
+Dos diferencias hacían que la corriente de la Pestaña 1 no fuera la de la Pestaña 3:
+
+- La Pestaña 1 no descontaba la sombra de la malla de plata: reportaba 15,03 mA/cm² donde la
+  Pestaña 3 usa 14,57. Ahora la malla es el primer paso del recorrido, porque físicamente la luz
+  choca primero con los dedos.
+- La Pestaña 1 usaba la colección de la celda homogénea nominal, mientras las otras usan la
+  promediada por área sobre los sectores (D-28). Con dispersión cero coinciden; con dispersión no.
+  Ahora usa la promediada, extendida a los tres destinos.
+
+El monitor lo vigila en vivo (M-20): las dos pestañas deben entregar la misma corriente fotogenerada
+con una diferencia menor a una parte por millón.
+
+---
+
+## D-38 · Monitor físico en vivo — [VALIDACIÓN NUEVA]
+
+Las 21 verificaciones de `checks.py` son una certificación: corren siempre sobre la celda de la
+semilla. Ninguna miraba los controles, así que un parámetro sin sentido no producía ningún aviso.
+
+Se agrega un segundo sistema que corre en cada ejecución sobre los valores actuales. No recalcula:
+cada pestaña publica en un registro común lo que ya resolvió, y el monitor evalúa sobre eso. Distingue
+tres estados: EN ORDEN; AVISO, cuando el cálculo es correcto pero lo pedido no es físicamente posible o
+se sale de un supuesto del curso; y FALLA, cuando se rompe algo que el modelo debe cumplir para
+cualquier parámetro.
+
+| Código | Vigilancia | Si no se cumple |
+|---|---|---|
+| M-01 | Balance de fotones (V1 en vivo) | FALLA |
+| M-02 | Todos los destinos del fotón suman uno (C-T9 en vivo) | FALLA |
+| M-03 | Colección entre 0 y 1 antes del recorte (C-T1 en vivo) | FALLA |
+| M-04 | Colección unitaria en los bordes de la zona de depleción (C-T2 en vivo) | FALLA |
+| M-05 | Juntura, superficie y volumen suman uno | FALLA |
+| M-06 | Eficiencia cuántica bajo 1 − R (V5 en vivo) | FALLA |
+| M-07 | La grilla resuelve la absorción más superficial | FALLA |
+| M-08 | La zona de depleción cabe en el emisor (el aviso de D-21, que nunca se mostraba) | AVISO |
+| M-09 | Zona de depleción angosta frente a la difusión (U3, lámina 15) | AVISO |
+| M-10 | Vida media del emisor bajo el techo intrínseco (D-33) | AVISO |
+| M-11 | Vida media de la base bajo el techo intrínseco (D-33) | AVISO |
+| M-20 | Las Pestañas 1 y 3 entregan la misma corriente fotogenerada (D-37) | FALLA |
+
+El resumen queda arriba de la barra lateral, visible desde cualquier pestaña; los avisos de la
+Pestaña 1 aparecen además dentro de ella, y la tabla completa en la Pestaña 5. Las demás pestañas se
+incorporan al revisarlas.
+
+---
+
+## D-39 · Figuras de la Pestaña 1 rehechas — [FIGURAS]
+
+**El mapa λ-x vuelve.** D-31 lo había retirado, y eso dejó sin cumplir una salida obligatoria del
+enunciado: «el mapa bidimensional de generación en el plano λ–x, que es la gráfica que muestra a qué
+profundidad se absorbe cada color». Se reconstruye con otra cantidad: la probabilidad de que un fotón
+que entró se absorba en cada capa, con capas de igual ancho en escala logarítmica. Así cada color es
+comparable con los demás sin normalizarlo contra sí mismo, que era el defecto de fondo de D-29. Lleva
+las líneas del 50 % y el 90 % absorbido, porque el enunciado anuncia la pregunta de predecir el 90 % a
+450 y 950 nm y verificarlo en este mapa.
+
+**La cascada pasa a ser un diagrama de flujo proporcional** (Sankey), con las diez rutas y la malla.
+
+**La penetración por color pasa a ser un corte de la celda con un rayo por color**, conservando la
+curva continua 1/α(λ) superpuesta al espesor que exige el enunciado.
+
+**La probabilidad de colección se muestra completa:** para cada profundidad, cuántos pares llegan a
+la juntura, cuántos mueren en una superficie y cuántos en el volumen. El borde de la banda verde sigue
+siendo la curva f_c(x) del enunciado.
+
+**La generación se reparte en los mismos tres destinos**, y sigue mostrando G(x) con la juntura
+marcada.
+
+**Terminología.** «Zona de deplexión» no es un término del español. El enunciado y la Unidad 3
+(lámina 15) usan «zona» o «región de depleción». Se adopta «zona de depleción (juntura p-n)».
+
+**Figuras nuevas.** Un diagrama de recorrido al comienzo que integra las cifras principales, y el
+viaje de un fotón: una animación en corte transversal con narración, cuyas bifurcaciones se sortean
+con las probabilidades del modelo. Su escala vertical es esquemática y la forma del camino de difusión
+es ilustrativa; las dos cosas se declaran en la propia figura.
+
+---
+
+## D-40 · Ajustes de la Pestaña 1 tras la revisión del usuario — [FIGURAS]
+
+**La animación 3D marca cada par donde nació.** En la versión de D-39 los pares que llegaban a la
+juntura se desplazaban hasta el plano de la juntura y los que morían en una superficie hasta esa
+superficie, así que al terminar la base quedaba casi vacía. No era un error de física, pero se perdía
+la información de dónde se absorbe cada color y parecía que casi ningún par nacía en el medio. Ahora
+cada par queda marcado en el lugar donde nació, con el color de su destino, y una línea recta lo une
+con el lugar donde terminó. La línea indica el destino, no el camino: el recorrido real del portador
+es una difusión al azar.
+
+Las cruces rosadas, recombinación en el volumen, son escasas con la semilla por una razón física: la
+longitud de difusión de la base, 314 µm, triplica su espesor, y en el emisor la superficie frontal
+captura los pares antes que el volumen. Solo el 1,5 % de los pares se recombina en el volumen, aunque
+el 27 % nace a más de 10 µm de profundidad. Con τ_n = 0,1 µs la fracción sube al 20 %. La pestaña lo
+explica con cifras calculadas en vivo.
+
+**El mapa λ-x se transpone.** La profundidad pasa al eje horizontal y la longitud de onda al vertical,
+de modo que al avanzar hacia adentro de la celda se lee cómo la absorción se corre a colores más largos.
+
+**Colores reservados por Streamlit.** El tema de Streamlit usa ciertos colores, entre ellos #000004,
+como marcadores internos y los reemplaza por colores de su paleta. El negro de la escala «inferno» es
+exactamente ese, y el cero del mapa salía rojo. Se escribe la escala punto por punto con un negro
+equivalente que no coincide con los marcadores. Conviene evitar colores de la forma #0000XX en
+cualquier figura.
+
+---
+
+## D-41 · Los sectores varían desde el estado inicial, con correlación espacial — [MODELO CORREGIDO]
+
+**Qué pasaba.** El estado inicial traía la variación de fabricación en cero, por la razón de D-28: la
+Tabla A.1 describe una celda homogénea. Con eso los 64 sectores eran idénticos y el mapa de eficiencia
+cuántica de la Pestaña 2 salía plano. Pero el enunciado pide explícitamente que la celda se divida en
+una grilla de al menos 8 × 8 sectores, **cada uno con su propio τ local y su propia S_frontal local**,
+y que se muestre el mapa de la IQE local. Un estado inicial homogéneo no cumple eso.
+
+Además, cuando la variación se subía, cada sector se sorteaba independiente de sus vecinos: un ruido
+blanco, con correlación de 0,23 entre sectores contiguos, que se ve como un tablero al azar y no como
+una oblea.
+
+**Corrección.**
+
+- La variación se genera con un campo aleatorio suave: se sortea un valor por sector y se promedia con
+  sus vecinos con peso gaussiano de ancho 1,2 sectores, unos 2,3 cm sobre la oblea de 15,6 cm. Sectores
+  vecinos se parecen, porque las causas reales —la historia térmica del lingote, la uniformidad del
+  horno de difusión— actúan sobre regiones extensas. Parámetro de diseño declarado.
+- El campo se normaliza a media cero y desviación uno, así que los valores de la barra lateral son
+  exactamente la media geométrica de los sectores: la semilla sigue describiendo la celda.
+- τ_n y S_f se sortean de forma independiente, porque uno es un defecto del volumen y la otra de la
+  superficie.
+- El estado inicial trae una variación de **0,25** en el logaritmo: sectores entre unas 0,6 y 1,6 veces
+  el valor nominal.
+
+**Efecto sobre las cifras.** La corriente de la celda sube de 14,5526 a 14,5742 mA/cm² (+0,15 %), porque
+la colección no es lineal en τ y S_f. La eficiencia pasa de 6,5726 % a 6,5829 %. La certificación se
+actualizó para usar la misma celda que muestra la aplicación: V3, V5, V6, V7, C-T3 y C-T9 promedian la
+colección sobre los sectores del estado inicial. C-T6 sigue comparando la celda homogénea, que es lo que
+dice verificar. Las 21 verificaciones pasan.
+
+**En el mapa.** A 450 nm la IQE local varía entre 14,7 % y 24,9 %; a 900 nm, entre 82,0 % y 83,8 %. El
+promedio del mapa coincide con la IQE de la celda hasta 10⁻¹⁶.
+
+---
+
+## D-42 · Pestaña 2 rehecha — [FIGURAS · VALIDACIÓN]
+
+**Portada.** Un diagrama del recorrido de los fotones de un color hasta la eficiencia cuántica, con las
+cifras del color del ensayo, y cuatro cifras de diagnóstico: EQE media, IQE en el azul y en el rojo, y el
+rango entre sectores. La corriente se informa con y sin la sombra de la malla, para que coincida con la
+de las Pestañas 1 y 3.
+
+**Qué parte de la curva informa sobre qué parte de la celda.** Reemplaza la familia de curvas por vida
+media, que respondía una sola pregunta. Tres paneles cambian un parámetro cada uno —recombinación frontal,
+vida media de la base, espesor de la base— y sombrean los colores donde las curvas se separan más de 3
+puntos. Responde directamente la pregunta de la presentación. El panel de vida media usa ahora los valores
+de la lámina 30 de la Unidad 3 (10, 50 y 200 µs). En esta celda su efecto en el rojo es moderado, porque
+incluso con 10 µs la longitud de difusión, 181 µm, supera la base de 100 µm; con una base de 300 µm las
+mismas vidas medias separan el rojo de 950 nm en 12,7 puntos, y la pestaña lo informa.
+
+**Relieve de los sectores.** Se conserva la superficie tridimensional original, que pasa por el centro de
+cada sector, con altura y color iguales a su IQE local. Se probó una versión con una columna por sector y
+se descartó: la superficie resultó más legible, y con la variación suave de D-41 unir los sectores es una
+representación razonable. Se le agregó un plano translúcido en la IQE de la celda y los valores locales de
+vida media y recombinación frontal al pasar el cursor. El eje vertical se ajusta al rango de los sectores y
+lo declara en el subtítulo; un control lo lleva a la escala completa. El relieve antiguo se veía plano
+porque la celda era homogénea, no por el tipo de gráfico. Se agregan los mapas de las causas —vida media y
+recombinación frontal locales— y la correlación del relieve con cada una, calculada en vivo: en el azul
+sigue a la superficie; en el rojo, a la vida media.
+
+**Cómo se calcula.** Una sección explica de qué trata, los cuatro pasos del cálculo y qué observar en el azul, el rojo y el infrarrojo, con cifras en vivo. Una animación recorre el espectro. Para cada color muestra dónde se absorben los
+fotones y cuáles de los pares llegan a la juntura, dibujados por década de profundidad para que las áreas
+sean proporcionales, y construye la curva punto por punto. Informa también la respuesta espectral, que es
+lo que mide el instrumento (Unidad 3, lámina 27).
+
+**Monitor en vivo.** Vigilancias nuevas:
+
+| Código | Vigilancia | Si no se cumple |
+|---|---|---|
+| M-21 | El promedio del mapa es la IQE de la celda (C-T7 en vivo) | FALLA |
+| M-22 | Ningún sector supera el 100 % de IQE (V5 local) | FALLA |
+| M-23 | Las vidas medias locales de la base bajo su techo intrínseco | AVISO |
+| M-24 | El azul no depende de la vida media de la base (lámina 30) | AVISO |
+| M-25 | La corriente de la curva de la Pestaña 2 es la del balance de la Pestaña 1 | FALLA |
+| M-26 | La eficiencia por fotón absorbido no supera el 100 % (D-43) | FALLA |
+
+---
+
+## D-43 · La eficiencia por fotón absorbido contaba una sola pasada — [ERROR CORREGIDO]
+
+**Qué pasaba.** La curva de eficiencia por fotón absorbido de la Pestaña 2 (D-24) dividía la EQE por
+la absorción de una sola pasada, (1 − R)·(1 − e^(−αW)). Sin reflector trasero es la absorción correcta.
+Con el reflector activo, en cambio, la EQE ya incluye los pares que genera la luz devuelta por el
+aluminio, pero el divisor no la contaba: a 1100 nm la curva marcaba 214 % y a 1190 nm, 223 %. Se
+encontró al preparar el manual de la Pestaña 2.
+
+**Corrección.** El divisor es ahora lo que el silicio absorbe de verdad: la integral del perfil de
+generación dividida por el flujo que llega. Cuenta exactamente lo mismo que la EQE —todos los rebotes
+del reflector, con la reflectancia elegida— y sin reflector coincide con la fórmula anterior. Con el
+reflector, el máximo de la curva queda en 86,4 %, casi igual al de la celda sin reflector, 86,7 %, como
+debe ser: el reflector agrega luz, no cambia la calidad de la colección.
+
+**Vigilancia nueva.** M-26 comprueba en cada ejecución que esa curva no supere el 100 %, con nivel de
+falla. Habría detectado el error. El monitor pasa a 18 vigilancias; con la semilla, 17 en orden y el
+aviso de M-10 (D-33).
+
+---
+
+## D-44 · La malla frontal, contada como proceso — [FIGURAS]
+
+**Qué pasaba.** La Pestaña 3 cerraba con un gráfico que superponía tres curvas con tres unidades
+distintas: el área sombreada en por ciento, la resistencia serie en ohm por centímetro cuadrado y la
+eficiencia en un tercer eje sin marcas. Mostraba que existe un óptimo, pero no dejaba ver por qué, y no
+permitía comparar las dos pérdidas, que es justamente lo que el enunciado pide mostrar.
+
+**Qué se hizo.** La sección pasa a contar el compromiso en tres pasos.
+
+1. **El viaje de una carga.** Un relieve en tres dimensiones con el voltaje que pierde una carga según
+   dónde se recogió: cero sobre un dedo, máximo a medio camino entre dos —una parábola, porque la
+   corriente se va acumulando— y creciendo hacia la barra colectora a lo largo del propio dedo. Las dos
+   expresiones que dibuja el relieve son las mismas cuyo promedio da la resistencia de la malla, así que
+   la figura muestra de dónde salen esas fórmulas. Con la semilla: 6,77 mV en el emisor y 2,93 mV en el
+   dedo, sobre un voltaje de trabajo de 0,493 V.
+2. **Cuánto cuesta cada cosa.** Las dos pérdidas se llevan a una sola unidad, puntos de eficiencia,
+   resolviendo la curva I-V completa en cada caso (`physics/compromiso.py`). La resta es secuencial y el
+   orden está declarado: a la celda sin malla se le agrega primero la sombra, después la resistencia del
+   emisor y al final la de los dedos. Las tres suman exactamente la distancia entre la celda sin malla y
+   la celda real. Se apilan contra el número de dedos, y el mínimo de la pila es el óptimo, sin comparar
+   ejes distintos. Con la semilla: 60 dedos cuestan 0,315 puntos y el óptimo son 50 dedos, con 0,309.
+3. **El recorrido.** Una animación agrega dedos de a poco, con la curva I-V a la izquierda y las tres
+   pérdidas a la derecha. Cada cuadro es una celda resuelta de verdad: 39 mallas, tres curvas completas
+   cada una.
+
+**Costo.** El barrido resuelve 118 curvas. Con 70 voltajes por curva —el punto de máxima potencia se
+afina aparte, así que la eficiencia coincide en la sexta cifra con la de 420 puntos— toma 1,9 s, y queda
+en caché aparte, porque no depende del número de dedos elegido: al moverlo solo se mueve la marca.
+
+---
+
+## D-45 · Cómo se resuelve la curva, y dónde está la trampa — [FIGURAS]
+
+**Qué faltaba.** La pestaña advertía que la ecuación es implícita y comparaba dos factores de forma, pero
+no mostraba el cálculo. Tampoco quedaba a la vista qué hace cada parte del circuito equivalente en cada
+punto de la curva.
+
+**Qué se hizo.** Una sección final, con la misma forma que la de la Pestaña 2.
+
+- **Un circuito equivalente con las cifras del punto elegido**, dibujado en SVG: la corriente que genera
+  la luz repartida entre el diodo, la resistencia paralela y el circuito, y la caída sobre la resistencia
+  serie. Un control elige el punto como fracción del voltaje de circuito abierto —no en volts— para que
+  el control siga siendo válido cuando el voltaje de circuito abierto cambia con la temperatura o la
+  irradiancia. En el punto de máxima potencia de la semilla: de 14,59 mA/cm², el diodo se lleva 0,73 y la
+  fuga 0,506; salen 13,35, y la resistencia serie consume 13,1 mV.
+- **Una animación del barrido** que, para cada voltaje, dibuja la función que el programa anula y marca
+  su raíz, junto a la curva que se va armando. La cruz gris es lo que daría la forma explícita: coincide
+  con la raíz a voltaje bajo y se separa cerca del punto de máxima potencia, que es donde el error
+  importa. En la semilla, el atajo da 13,64 en lugar de 13,35 mA/cm², un 2,2 % de más.
+
+**Corrección de texto.** La pestaña decía que la verificación V4 detecta el error de la forma explícita.
+No puede: V4 se evalúa con resistencia serie nula, y sin ella las dos formas coinciden. La verificación
+que lo detecta es C-T5, que evalúa con resistencia no nula (D-27). El enunciado tiene la misma
+imprecisión —menciona V5, que en su propia tabla es la cota de la eficiencia cuántica—, y así queda
+declarado.
+
+---
+
+## D-46 · Portada de la Pestaña 3, y dos figuras que salieron — [FIGURAS]
+
+**La portada.** La pestaña abría con cuatro cifras sueltas. Ahora abre como las Pestañas 1 y 2: un
+recorrido de seis tarjetas que va de la corriente a la potencia —corriente fotogenerada, cortocircuito,
+voltaje de circuito abierto, punto de trabajo, factor de forma y potencia— cada una con la pérdida que
+explica el paso siguiente, y seis cifras debajo, con la potencia máxima y la resistencia serie desglosada
+entre la malla y el resto del circuito. La primera tarjeta declara que la corriente viene de las Pestañas
+1 y 2, que es lo que exige V3 y vigila M-25.
+
+Dos cifras que la portada deja a la vista y antes no estaban: el **déficit de voltaje**, 0,532 V bajo la
+banda prohibida —la celda sostiene el 52,5 % del techo—, y la **distancia al factor de forma ideal**,
+0,0479. Las dos son las que necesita el balance de potencia.
+
+**Dos figuras que salieron.** El relieve en tres dimensiones de la caída de voltaje y la animación del
+número de dedos se sacaron a pedido del usuario: eran vistosas, pero el lector no distinguía qué pregunta
+respondían que no respondiera ya el gráfico del compromiso. Lo que el relieve explicaba —de dónde salen
+las dos expresiones de la resistencia de la malla y cuánto cuesta el viaje de una carga, 6,77 mV en el
+emisor y 2,93 en el dedo— quedó como texto con las mismas cifras, calculadas igual. El reparto de la
+pérdida en puntos de eficiencia se queda: es la figura que responde el «debe verse el compromiso» del
+enunciado, y sin ella la pestaña no lo cumple.
+
+**Regla que queda.** Una figura se justifica por la pregunta que responde, no por cómo se ve. Si su
+pregunta ya está respondida en otra parte, sale.
+
+---
+
+## D-47 · Balance de potencia de la Pestaña 3 — [FIGURAS]
+
+**Qué faltaba.** La pestaña informaba que la celda entrega 6,58 % y no decía dónde quedaba el 93,4 %
+restante. El enunciado pide comparar el factor de forma con el ideal y mostrar el compromiso de la
+malla, pero la lectura de conjunto —qué pérdida pesa más y cuál se puede corregir— no estaba en ninguna
+parte.
+
+**La convención, declarada en pantalla.** Cada par que llega a la juntura vale la energía de la banda
+prohibida; todo lo que el fotón traía de más ya se contó como termalización. Con eso, cada fotón perdido
+cuesta lo mismo —la banda prohibida por su carga— y las pérdidas eléctricas se miden sobre lo que
+sobrevive. Es la contabilidad del límite de eficiencia de la Unidad 4, aplicada a esta celda.
+
+**El reparto con la semilla**, en mW/cm² sobre los 100,04 que trae el espectro:
+
+| Etapa | mW/cm² | Familia |
+|---|---|---|
+| Bajo la banda prohibida, más de 1108 nm | 19,23 | lo impone el silicio |
+| Termalización | 31,75 | lo impone el silicio |
+| Malla de plata | 1,51 | óptica |
+| Reflexión en la superficie | 16,74 | óptica |
+| Luz que no se absorbe | 4,26 | óptica |
+| Recombinación en la superficie frontal | 9,35 | recombinación |
+| Recombinación en el volumen y atrás | 0,88 | recombinación |
+| Déficit de voltaje | 7,76 | eléctrica |
+| Pérdida de forma y fuga | 1,98 | eléctrica |
+| **Entregada** | **6,58** | |
+
+**Coherencia.** El reparto óptico y de recombinación sale de los mismos diez destinos de la Pestaña 1,
+restringidos a los fotones sobre la banda prohibida: los diez más la malla suman 49,055 mW/cm², que es
+exactamente la energía que sobrevive a la termalización, calculada por separado desde el espectro. El
+balance completo cierra con un error de 8×10⁻⁴ mW/cm². La última pérdida se calcula como resto, así que
+el cierre es exacto por construcción y lo que mide el error es la corriente que aportan los fotones de
+más de 1108 nm, que el coeficiente de absorción medido todavía absorbe un poco.
+
+**Lo que se aprende.** Las dos pérdidas mayores, 51 mW/cm², no dependen del diseño. De las que sí, la
+reflexión sola se lleva 16,7 mW/cm², más del doble de lo que la celda entrega, porque el enunciado pide
+la superficie pulida y sin recubrimiento antirreflejo. La pestaña lo cuantifica en vivo: con una
+reflectancia del 5 %, la misma celda daría 9,66 % en lugar de 6,58 %.
+
+**Precisiones declaradas.** El espectro se integra completo, incluidos los fotones de más de 1200 nm que
+el modelo óptico no recorre, porque su energía llega igual; los de menos de 300 nm aportan menos de
+0,001 mW/cm² y quedan dentro de la termalización. La potencia incidente del balance es la del archivo,
+100,04 mW/cm², mientras que la eficiencia usa los 100,00 de referencia: 0,04 % de diferencia.
+
+---
+
+## D-48 · La Pestaña 4, rehecha: fallas con forma de falla y zonas que se apagan solas — [MODELO · FIGURAS]
+
+**Qué estaba mal.** La física eléctrica estaba bien —sectores en paralelo a voltaje de terminal común, con
+su propia fotocorriente, su corriente de saturación y su resistencia— pero las fallas no. La contaminación
+era un rango de filas por un rango de columnas, un rectángulo perfecto; el defecto resistivo, una columna
+entera sin dedo. Ninguna falla de laboratorio tiene esa forma. Peor: las zonas apagadas había que
+dibujarlas, cuando en una celda real aparecen porque un trozo se quedó sin camino hacia la barra
+colectora.
+
+**Malla fina y malla de reporte.** La física se resuelve ahora sobre 48 × 48 celdas de 3,25 mm, seis por
+cada sector de los 8 × 8 que exige el enunciado, que se mantienen como grilla de reporte y se dibujan
+encima de los mapas. Cada celda fina sigue siendo un problema unidimensional: su lado es diez veces la
+longitud de difusión de la base. El campo de fabricación fino se construye como el de 8 × 8 más un detalle
+de promedio cero dentro de cada sector, así que **la media geométrica de cada bloque es exactamente el
+sector que usa la Pestaña 2**: las dos pestañas describen la misma celda y ninguna cifra de referencia se
+movió. Lo vigila M-40.
+
+**Las dos fallas.**
+
+- **La grieta se propaga.** Avanza con dirección persistente, gira un poco al azar en cada paso y se
+  ramifica con cierta probabilidad. Por debajo de severidad 0,5 nace en un borde; por encima, de un punto
+  de impacto, del que salen tres brazos. Corta los dedos que cruza: no se eligen, se calculan.
+- **La contaminación es una mancha.** El mismo generador de campo correlacionado de la celda, recortado
+  por encima de un umbral: bordes irregulares, como una mancha real. La severidad mueve a la vez el área
+  y la caída del tiempo de vida, hasta mil veces menos en el núcleo.
+
+**El camino eléctrico, que es lo que cambia todo.** Para cada celda fina se calcula el recorrido de la
+corriente hasta la barra colectora: cruzando el emisor hasta el dedo útil más cercano —esquivando la
+grieta, que también corta el silicio— y después por el propio dedo. Las dos resistencias usan las mismas
+expresiones cuyo promedio da la resistencia de la malla sana, así que **sin grieta el cálculo reproduce el
+valor analítico dentro del 0,2 %**: ésa es su calibración, y M-41 la comprueba en vivo. Una celda sin
+ningún camino queda aislada y se apaga sola. La fragmentación dejó de dibujarse y pasó a ser un resultado.
+
+**Electroluminiscencia.** El brillo de cada trozo va con la exponencial del voltaje que ve su juntura, que
+el solver ya calcula. Un trozo lejos del metal brilla varias veces menos que uno bien conectado aunque
+genere la misma corriente, y uno aislado sale negro: es exactamente lo que detecta el ensayo real, y lo que
+el mapa de corriente no puede ver.
+
+**Propagación a la Pestaña 3.** El enunciado la pide con esas palabras. La celda con fallas se resuelve en
+un módulo compartido, `ui/danos.py`, y la Pestaña 3 dibuja la curva dañada junto a la sana con la caída de
+eficiencia escrita en la leyenda. Como ambas pestañas piden el mismo cálculo por caché, la segunda no paga
+nada.
+
+**Lo que costó hacerlo posible.** Con la malla fina, el código anterior habría tardado más de veinte
+segundos por ejecución. Se vectorizaron dos cosas:
+
+| | Antes | Ahora |
+|---|---|---|
+| Colección de los sectores | bucle, 64 llamadas | una operación; 48 × 48 en 115 ms |
+| Curva global | bisección, 80 pasos por voltaje | Newton con red de seguridad, arrancando en la solución del voltaje anterior |
+| Curva de 64 sectores | 633 ms | 69 ms |
+| Curva de 2304 sectores | ~23 s estimados | 0,1 a 0,8 s |
+
+Dos detalles del solver que importan: el intervalo de búsqueda se acota entre el voltaje de terminal y el
+circuito abierto local del sector —no con la caída sobre la resistencia serie, que para un sector aislado
+daría miles de volts— y cada voltaje arranca donde terminó el anterior, que es lo que baja las iteraciones
+de cuarenta a tres o cuatro.
+
+**Verificaciones.** Las 21 de la certificación siguen pasando, y C-T6 y C-T8 ahora coinciden **exactamente**
+—587,1002 mV y 14,58327 mA/cm²— porque las dos vías parten de la misma resistencia serie. El monitor sube a
+21 vigilancias con M-40 (identidad por bloques), M-41 (calibración del camino) y M-42 (las Pestañas 3 y 4
+dan la misma celda sin fallas).
+
+**Límites declarados.** El camino eléctrico es el de menor distancia hasta el dedo útil más cercano, no la
+solución de la red completa de resistencias. No hay acoplamiento lateral entre celdas vecinas ni balance
+térmico: el modelo no calcula temperatura, así que no predice puntos calientes.
+

@@ -11,7 +11,9 @@ import streamlit as st
 
 import config
 import constants as C
+from ui import monitor as monitor_ui
 from ui import sidebar, tab_absorcion, tab_eqe, tab_iv, tab_sectores, tab_validacion
+from validation import monitor
 
 st.set_page_config(
     page_title="Laboratorio virtual de celda p-n",
@@ -54,7 +56,12 @@ st.caption(
     f"sin recubrimiento antirreflejo  ·  espectro AM1.5G (ASTM G173-03)"
 )
 
-sidebar.render()
+# Registro común de esta ejecución: cada pestaña publica aquí lo que ya calculó, y
+# el monitor en vivo evalúa sobre eso sin recalcular. Se vacía en cada ejecución
+# para que nunca quede un resultado de parámetros anteriores.
+st.session_state["_bus"] = {}
+
+espacio_monitor = sidebar.render()
 
 pestanas = st.tabs([
     "1 · Absorción y generación",
@@ -72,5 +79,10 @@ with pestanas[2]:
     tab_iv.render()
 with pestanas[3]:
     tab_sectores.render()
+
+vigilancias = monitor.evaluar(st.session_state["_bus"])
+
 with pestanas[4]:
-    tab_validacion.render()
+    tab_validacion.render(vigilancias)
+
+monitor_ui.render_barra(espacio_monitor, vigilancias)

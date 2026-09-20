@@ -1,4 +1,4 @@
-"""Pestaña 4 - Mapa de la celda por sectores y defectos localizados."""
+"""Pestaña 4 - Mapa de la celda por sectores: fallas localizadas y su efecto."""
 
 import numpy as np
 import pandas as pd
@@ -6,277 +6,242 @@ import streamlit as st
 
 import config
 import constants as C
-from physics.collection import transporte as armar_transporte
-from physics.material import juntura as resolver_juntura
-from physics.optics import campo_optico
+from physics.defectos import Defectos, promedio_por_bloques
 from physics.quantum_efficiency import generar_sectores
-from physics.sectors import (
-    Defectos,
-    armar_celda,
-    curva_global,
-    parametros_de_curva,
-)
-from units import celsius_a_kelvin, um_a_cm
+from physics.sectors import voltajes_de_juntura
+from ui import danos
+from units import voltaje_termico
 from visualization import defect_plots
-
-NODOS_EN_DEPLEXION = 12
-
-
-@st.cache_data(show_spinner=False, max_entries=6)
-def _base_fisica(d_n_um, W_p_um, na, nd, t_c, reflector, irradiancia,
-                 mu_p, tau_p_us, mu_n, tau_n_us, s_f, s_r):
-    d_n, W_p = um_a_cm(d_n_um), um_a_cm(W_p_um)
-    t_k = celsius_a_kelvin(t_c)
-    union = resolver_juntura(d_n, na, nd, t_k)
-    campo = campo_optico(d_n, W_p, reflector, irradiancia,
-                         np.linspace(max(union.x_n, 0.0), union.x_p, NODOS_EN_DEPLEXION))
-    tr = armar_transporte(mu_p, tau_p_us * 1e-6, mu_n, tau_n_us * 1e-6, s_f, s_r, t_k)
-    return campo, union, tr, t_k, d_n + W_p
+from visualization.optics_plots import _coma
 
 
-@st.cache_data(show_spinner=False, max_entries=16)
-def _resolver(_campo, _union, W, _tr, huella, t_k, na, nd, tau_n_us, s_f, dispersion,
-              defectos, n_dedos, ancho_dedo_um, rs_base, rp, n_idealidad,
-              irradiancia):
-    """
-    `huella` reune los parametros fisicos que solo entran por objetos con guion
-    bajo. Streamlit excluye esos del hash de cache, asi que sin ella un cambio de
-    tau_p, S_r, temperatura o reflector devolveria un resultado viejo (ver D-22).
-    """
-    sectores = generar_sectores(config.N_SECTORES, tau_n_us * 1e-6, s_f, dispersion)
-    celda = armar_celda(_campo, _union, W, _tr, sectores, defectos,
-                        n_dedos, ancho_dedo_um * 1e-4, rs_base, na, nd, t_k)
-    v, j, v_oc = curva_global(celda, rp, n_idealidad, t_k)
-    p = parametros_de_curva(v, j, C.IRRADIANCE_1SUN * irradiancia, v_oc)
-    return celda, v, j, p
-
-
-def _controles_defectos():
-    st.markdown("#### Introducir defectos")
-    izq, der = st.columns(2, gap="large")
+def _controles():
+    """Las dos fallas, con una severidad cada una y un sorteo compartido."""
+    s = st.session_state
+    st.markdown("#### Introducir fallas")
+    izq, der, boton = st.columns([5, 5, 2], gap="large")
 
     with izq:
-        contaminacion = st.toggle(
-            "Región de bajo tiempo de vida", value=True,
-            help="Contaminación metálica: acorta la longitud de difusión y hunde "
-                 "la colección de esos sectores.")
-        f0, f1 = st.select_slider(
-            "Filas afectadas", options=list(range(config.N_SECTORES)),
-            value=(2, 4), disabled=not contaminacion)
-        c0, c1 = st.select_slider(
-            "Columnas afectadas", options=list(range(config.N_SECTORES)),
-            value=(2, 4), disabled=not contaminacion)
-        severidad = st.select_slider(
-            "El tiempo de vida local se multiplica por",
-            options=[1.0, 0.3, 0.1, 0.03, 0.01, 0.003, 0.001],
-            value=0.001, format_func=lambda x: f"{x:g}",
-            disabled=not contaminacion)
-
+        st.toggle("Grieta", key="grieta_activa",
+                  help="Una grieta que se propaga desde un borde o desde un punto de "
+                       "impacto, y corta los dedos de plata que cruza.")
+        st.slider("Severidad de la grieta", *config.RANGOS["severidad_grieta"], step=0.05,
+                  key="severidad_grieta", disabled=not s.grieta_activa,
+                  help="Cuánto avanza y cuánto se ramifica. Desde 0,5 la grieta nace de "
+                       "un impacto y sale en tres direcciones.")
     with der:
-        dedo_roto = st.toggle(
-            "Dedos de plata interrumpidos", value=True,
-            help="El metal sigue tapando la luz pero deja de conducir: la corriente "
-                 "tiene que alcanzar el siguiente dedo intacto.")
-        columna = st.select_slider(
-            "Columna de sectores que se queda sin dedo",
-            options=list(range(config.N_SECTORES)), value=6,
-            disabled=not dedo_roto)
-        st.caption(
-            "Se interrumpen los dedos que sirven a esa columna. Con 60 dedos sobre "
-            "8 columnas son unos 7 u 8 dedos consecutivos, así que la corriente del "
-            "centro de la franja debe recorrer varias separaciones hasta el primer "
-            "dedo sano."
-        )
-
-    return Defectos(
-        contaminacion_activa=contaminacion, fila_0=f0, fila_1=f1,
-        columna_0=c0, columna_1=c1, factor_tau=severidad,
-        dedo_roto_activo=dedo_roto, columna_dedo=columna,
-    )
+        st.toggle("Contaminación metálica", key="contaminacion_activa",
+                  help="Una mancha de forma orgánica donde el tiempo de vida se "
+                       "desploma.")
+        st.slider("Severidad de la contaminación", *config.RANGOS["severidad_contaminacion"],
+                  step=0.05, key="severidad_contaminacion",
+                  disabled=not s.contaminacion_activa,
+                  help="Mueve a la vez cuánta área cubre la mancha y cuánto cae el "
+                       "tiempo de vida dentro, hasta mil veces menos.")
+    with boton:
+        st.write("")
+        st.write("")
+        if st.button("Otra falla", use_container_width=True,
+                     help="Vuelve a sortear el trazado de la grieta y la forma de la "
+                          "mancha, con la misma severidad."):
+            s.semilla_falla = int(np.random.default_rng().integers(1, 10_000))
 
 
 def render():
     s = st.session_state
     st.subheader("Mapa de la celda por sectores")
     st.write(
-        "Una celda real no es homogénea, y eso es lo que revelan la "
-        "electroluminiscencia y la termografía. Aquí se introducen defectos "
-        "localizados y se observa su efecto tanto en el mapa como en la curva global."
+        "Una celda real no es homogénea, y eso es lo que revelan la electroluminiscencia y la "
+        "termografía. Aquí se le introducen fallas localizadas y se ve su efecto sobre el mapa y "
+        "sobre la curva. Las fallas no se dibujan sector por sector: la grieta se propaga sola y "
+        "corta los dedos que cruza, la mancha tiene forma orgánica, y las zonas que se apagan las "
+        "encuentra el cálculo, porque se quedaron sin camino hasta la barra colectora."
     )
 
-    campo, union, tr, t_k, W = _base_fisica(
-        s.d_n_um, s.W_p_um, s.NA, s.ND, s.T_c, s.reflector_trasero,
-        s.irradiancia_soles, s.mu_p, s.tau_p_us, s.mu_n, s.tau_n_us, s.S_f, s.S_r)
+    _controles()
 
-    # La dispersion es un unico control compartido, en la barra lateral: esta
-    # pestaña y la Pestaña 2 tienen que describir la misma celda (ver D-28).
-    dispersion = s.dispersion_sectores
-    if dispersion > 0:
-        st.caption(
-            f"Dispersión entre sectores **{dispersion:.2f}**, fijada en la barra "
-            f"lateral. Es la misma celda que retrata el mapa de la Pestaña 2.")
-    else:
-        st.caption(
-            "Celda homogénea. Súbase la dispersión en la barra lateral para añadir "
-            "variación de fabricación sobre la que actúan los defectos.")
-
-    defectos = _controles_defectos()
-
-    huella = (s.T_c, s.reflector_trasero, s.irradiancia_soles, s.mu_p, s.tau_p_us,
-              s.mu_n, s.S_r, s.d_n_um, s.W_p_um)
-    celda_sana, v0, j0_curva, p_sana = _resolver(
-        campo, union, W, tr, huella, t_k, s.NA, s.ND, s.tau_n_us, s.S_f, dispersion,
-        Defectos(), s.n_dedos, s.ancho_dedo_um, s.R_s, s.R_p, s.n_idealidad,
-        s.irradiancia_soles)
-    celda, v, j, p = _resolver(
-        campo, union, W, tr, huella, t_k, s.NA, s.ND, s.tau_n_us, s.S_f, dispersion,
-        defectos, s.n_dedos, s.ancho_dedo_um, s.R_s, s.R_p, s.n_idealidad,
-        s.irradiancia_soles)
+    defectos = danos.defectos_de(s)
+    sano = danos.resolver(s, danos.SIN_FALLAS)
+    danada = danos.resolver(s, defectos)
+    celda, fallas, p, p_sana = danada["celda"], danada["fallas"], danada["p"], sano["p"]
+    # La malla fina tiene que seguir describiendo la celda de la Pestaña 2: la media
+    # geométrica de cada bloque de 6 × 6 es el sector de 8 × 8 que ella usa.
+    grueso = generar_sectores(config.N_SECTORES, s.tau_n_us * 1e-6, s.S_f,
+                              s.dispersion_sectores)
+    media_geometrica = np.exp(promedio_por_bloques(np.log(danada["sectores"].tau_n_s),
+                                                   config.N_SECTORES))
+    error_bloques = float(np.max(np.abs(media_geometrica / grueso.tau_n_s - 1.0)))
+    r_sana = sano["celda"].r_s
+    st.session_state["_bus"]["defectos"] = dict(
+        hay=defectos.hay_defectos, v=danada["v"], j=danada["j"], p=p, p_sana=p_sana,
+        area_aislada=fallas.area_aislada, area_contaminada=fallas.area_contaminada,
+        error_bloques=error_bloques, r_calculada=float(np.mean(r_sana)),
+        r_analitica=float(s.R_s + danada["grid"].r_serie),
+        n_fino=config.N_SECTORES_FINOS)
 
     st.divider()
 
     def delta(clave, factor=1.0, unidad=""):
         d = factor * (p[clave] - p_sana[clave])
-        return f"{d:+.3f}{unidad}" if abs(d) > 5e-4 else "sin cambio"
+        return f"{'+' if d >= 0 else '−'}{_coma(abs(d), 3)}{unidad}" if abs(d) > 5e-4 else "sin cambio"
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Corriente de cortocircuito", f"{1e3 * p['j_sc']:.3f} mA/cm²",
+    c1.metric("Corriente de cortocircuito", f"{_coma(1e3 * p['j_sc'], 3)} mA/cm²",
               delta=delta("j_sc", 1e3), delta_color="normal")
-    c2.metric("Voltaje de circuito abierto", f"{p['v_oc']:.4f} V",
+    c2.metric("Voltaje de circuito abierto", f"{_coma(p['v_oc'], 4)} V",
               delta=delta("v_oc"), delta_color="normal")
-    c3.metric("Factor de forma", f"{p['ff']:.4f}", delta=delta("ff"),
-              delta_color="normal")
-    c4.metric("Eficiencia", f"{100 * p['eficiencia']:.3f} %",
+    c3.metric("Factor de forma", _coma(p["ff"], 4), delta=delta("ff"), delta_color="normal")
+    c4.metric("Eficiencia", f"{_coma(100 * p['eficiencia'], 3)} %",
               delta=delta("eficiencia", 100, " pts"), delta_color="normal")
 
-    area_col = float(celda.con_contaminacion.mean())
-    area_res = float(celda.con_dedo_roto.mean())
+    sanos = ~celda.aislados
     st.caption(
-        f"Área con contaminación **{100 * area_col:.2f} %**  ·  área sin dedo "
-        f"**{100 * area_res:.2f} %**  ·  resistencia serie local: "
-        f"{celda.r_s.min():.3f} Ω·cm² en los sectores sanos y "
-        f"**{celda.r_s.max():.3f} Ω·cm²** en los que perdieron su dedo"
+        f"Malla de {config.N_SECTORES_FINOS} × {config.N_SECTORES_FINOS} celdas de "
+        f"{_coma(10 * C.LADO_CELDA / config.N_SECTORES_FINOS, 1)} mm de lado, "
+        f"{config.N_SECTORES_FINOS // config.N_SECTORES} por cada sector de los "
+        f"{config.N_SECTORES} × {config.N_SECTORES} con que pide reportar el enunciado  ·  "
+        f"la grieta parte el **{_coma(100 * fallas.grieta.mean(), 2)} %** del área y corta "
+        f"**{fallas.dedos_cortados} de {fallas.dedos_totales}** columnas de dedos  ·  se quedó sin "
+        f"camino a la barra el **{_coma(100 * fallas.area_aislada, 2)} %**  ·  la mancha cubre el "
+        f"**{_coma(100 * fallas.area_contaminada, 2)} %**  ·  resistencia serie local entre "
+        f"{_coma(float(celda.r_s[sanos].min()), 3)} y {_coma(float(celda.r_s[sanos].max()), 2)} Ω·cm² "
+        f"en lo que sigue conectado"
     )
 
     m1, m2 = st.columns(2, gap="large")
     with m1:
-        st.plotly_chart(
-            defect_plots.mapa_fotocorriente_local(
-                celda.j_l, celda.con_contaminacion, celda.con_dedo_roto,
-                referencia=celda_sana.j_l),
-            use_container_width=True)
+        st.plotly_chart(defect_plots.mapa_de_la_celda(celda, fallas), use_container_width=True)
         st.caption(
-            "Este mapa dibuja **fotocorriente local**, no electroluminiscencia. La "
-            "contaminación se ve porque colecta menos. Los sectores sin dedo no se ven "
-            "aquí, pero eso es una consecuencia de lo que el mapa grafica, **no una "
-            "predicción de lo que vería un instrumento**: la electroluminiscencia real "
-            "sí detecta defectos de resistencia serie, y es una técnica estándar para eso."
+            "La corriente que genera cada trozo. La mancha se ve como una zona apagada; la grieta, "
+            "como una línea negra. Las cruces marcan los trozos que se quedaron aislados: el "
+            "cálculo los encontró siguiendo el camino de la corriente, no se dibujaron."
         )
     with m2:
-        st.plotly_chart(defect_plots.mapa_resistencia(celda.r_s),
-                        use_container_width=True)
+        st.plotly_chart(defect_plots.mapa_resistencia(celda, fallas), use_container_width=True)
         st.caption(
-            "Y aquí ocurre lo contrario: la columna sin dedo salta a la vista, mientras "
-            "que la región contaminada es invisible. Cada defecto se ve en su propio mapa."
+            "Lo que le cuesta a cada trozo llegar a la barra colectora. Donde la grieta cortó el "
+            "dedo, la corriente tiene que cruzar de lado por el emisor hasta el siguiente dedo "
+            "entero, y la resistencia sube con el cuadrado de esa distancia."
         )
 
+    # ------------------------------------------------------------------ electroluminiscencia
     st.divider()
-
+    st.markdown("#### La celda vista con electroluminiscencia")
+    st.write(
+        "Es el ensayo con que se inspeccionan paneles: se polariza la celda en directa, a oscuras, "
+        "y se fotografía la luz que emite al recombinarse. El brillo va con la exponencial del "
+        "voltaje que ve cada juntura, así que un trozo que no recibe voltaje sale negro. Detecta "
+        "justamente lo que el mapa de corriente no puede ver: los defectos de resistencia."
+    )
+    fraccion = st.slider("Voltaje de la inspección  [% del circuito abierto]", 50.0, 110.0,
+                         value=95.0, step=5.0, key="v_el",
+                         help="Las cámaras de electroluminiscencia trabajan cerca del circuito "
+                              "abierto, donde la celda emite más.")
+    v_el = float(p["v_oc"]) * fraccion / 100.0
+    v_juntura = voltajes_de_juntura(v_el, celda, s.R_p, s.n_idealidad, danada["t_k"])
+    vt_n = s.n_idealidad * voltaje_termico(danada["t_k"])
     st.plotly_chart(
-        defect_plots.comparacion_curvas(v0, j0_curva, v, j, p_sana, p),
+        defect_plots.electroluminiscencia(v_juntura, celda.aislados, vt_n, v_el, fallas),
         use_container_width=True)
+    contraste = float(np.exp((v_juntura[~celda.aislados].min() - v_juntura.max()) / vt_n))
+    st.caption(
+        f"A {_coma(v_el, 3)} V, el voltaje que ve la juntura va de "
+        f"{_coma(float(v_juntura[~celda.aislados].min()), 3)} a "
+        f"{_coma(float(v_juntura.max()), 3)} V entre los trozos conectados: los más lejanos del "
+        f"metal brillan {_coma(1 / max(contraste, 1e-9), 1)} veces menos que los mejores, aunque "
+        f"generan la misma corriente. Los aislados no reciben voltaje y salen negros."
+    )
+
+    # ------------------------------------------------------------------ la curva
+    st.divider()
+    st.plotly_chart(
+        defect_plots.comparacion_curvas(sano["v"], sano["j"], danada["v"], danada["j"],
+                                        p_sana, p),
+        use_container_width=True)
+    st.caption(
+        "La misma curva que dibuja la Pestaña 3, ahora con las fallas puestas. Allá aparece "
+        "superpuesta a la de la celda sana."
+    )
 
     st.markdown("#### Por qué los dos defectos dañan de maneras distintas")
     st.write(
-        "Ésta es la pregunta que el enunciado pide explicar, y el modelo la responde "
-        "solo, sin que la hayamos programado a mano: los 64 sectores están en paralelo "
-        "compartiendo el mismo voltaje de terminal, y de esa única condición sale toda "
-        "la asimetría."
+        "Ésta es la pregunta que el enunciado pide explicar, y el modelo la responde solo, sin que "
+        "la hayamos programado a mano: los sectores están en paralelo compartiendo el mismo voltaje "
+        "de terminal, y de esa única condición sale toda la asimetría."
     )
 
     izq, der = st.columns(2, gap="large")
     with izq:
         st.markdown(
-            "**El defecto de colección se lleva la corriente.** Los sectores "
-            "contaminados generan los mismos pares que antes, pero con la longitud de "
-            "difusión acortada la mayoría se recombina antes de alcanzar la juntura. "
-            "Entregan menos corriente **en todo el barrido**, incluido el "
-            "cortocircuito, así que la curva entera baja."
+            "**El defecto de colección se lleva la corriente.** Los trozos contaminados generan los "
+            "mismos pares que antes, pero con la longitud de difusión acortada la mayoría se "
+            "recombina antes de alcanzar la juntura. Entregan menos corriente **en todo el "
+            "barrido**, incluido el cortocircuito, así que la curva entera baja."
         )
     with der:
         st.markdown(
-            "**El defecto de resistencia se lleva el factor de forma.** Los sectores "
-            "sin dedo generan y colectan exactamente lo mismo. Cerca de cortocircuito "
-            "el voltaje sobre su resistencia es pequeño y entregan casi toda su "
-            "corriente. Pero al acercarse al punto de máxima potencia se ahogan, y lo "
-            "que se hunde es la esquina de la curva."
+            "**El defecto de resistencia se lleva el factor de forma.** Los trozos que perdieron su "
+            "dedo generan y colectan exactamente lo mismo. Cerca de cortocircuito el voltaje sobre "
+            "su resistencia es pequeño y entregan casi toda su corriente. Pero al acercarse al "
+            "punto de máxima potencia se ahogan, y lo que se hunde es la esquina de la curva. Solo "
+            "cuando quedan del todo aislados dejan también de aportar corriente."
         )
 
-    # Cada defecto por separado, para poder atribuir el daño sin ambiguedad.
-    def _solo(defecto_aislado):
-        _, _, _, pp = _resolver(
-            campo, union, W, tr, huella, t_k, s.NA, s.ND, s.tau_n_us, s.S_f,
-            dispersion, defecto_aislado, s.n_dedos, s.ancho_dedo_um, s.R_s,
-            s.R_p, s.n_idealidad, s.irradiancia_soles)
-        return pp
-
-    p_col = _solo(Defectos(
-        contaminacion_activa=defectos.contaminacion_activa,
-        fila_0=defectos.fila_0, fila_1=defectos.fila_1,
-        columna_0=defectos.columna_0, columna_1=defectos.columna_1,
-        factor_tau=defectos.factor_tau))
-    p_res = _solo(Defectos(dedo_roto_activo=defectos.dedo_roto_activo,
-                           columna_dedo=defectos.columna_dedo))
+    # Cada falla por separado, para poder atribuir el daño sin ambigüedad. Si solo hay
+    # una activa, la celda dañada ya es ese caso y no hace falta resolverla de nuevo.
+    solo_grieta = danada["p"] if not defectos.contaminacion_activa else danos.resolver(
+        s, Defectos(grieta_activa=defectos.grieta_activa,
+                    severidad_grieta=defectos.severidad_grieta,
+                    contaminacion_activa=False, semilla=defectos.semilla))["p"]
+    solo_mancha = danada["p"] if not defectos.grieta_activa else danos.resolver(
+        s, Defectos(grieta_activa=False,
+                    contaminacion_activa=defectos.contaminacion_activa,
+                    severidad_contaminacion=defectos.severidad_contaminacion,
+                    semilla=defectos.semilla))["p"]
 
     def caida(pp, clave):
         if p_sana[clave] == 0:
             return 0.0
         return 100.0 * (p_sana[clave] - pp[clave]) / p_sana[clave]
 
-    filas = ["Área dañada", "Caída de Jsc", "Caída del factor de forma",
-             "Caída de eficiencia"]
-    valores_col = [100 * area_col, caida(p_col, "j_sc"), caida(p_col, "ff"),
-                   caida(p_col, "eficiencia")]
-    valores_res = [100 * area_res, caida(p_res, "j_sc"), caida(p_res, "ff"),
-                   caida(p_res, "eficiencia")]
+    valores_mancha = [100 * fallas.area_contaminada, caida(solo_mancha, "j_sc"),
+                      caida(solo_mancha, "ff"), caida(solo_mancha, "eficiencia")]
+    valores_grieta = [100 * (fallas.grieta.mean() + fallas.area_aislada),
+                      caida(solo_grieta, "j_sc"), caida(solo_grieta, "ff"),
+                      caida(solo_grieta, "eficiencia")]
 
     st.dataframe(
         pd.DataFrame({
-            "": filas,
-            "Solo contaminación": [f"{x:.2f} %" for x in valores_col],
-            "Solo dedos rotos": [f"{x:.2f} %" for x in valores_res],
+            "": ["Área dañada", "Caída de Jsc", "Caída del factor de forma",
+                 "Caída de eficiencia"],
+            "Solo la mancha": [f"{_coma(x, 2)} %" for x in valores_mancha],
+            "Solo la grieta": [f"{_coma(x, 2)} %" for x in valores_grieta],
         }),
         hide_index=True, use_container_width=True)
 
     st.plotly_chart(
         defect_plots.asimetria_de_los_defectos(
-            {"coleccion": valores_col, "resistencia": valores_res}),
+            {"coleccion": valores_mancha, "resistencia": valores_grieta}),
         use_container_width=True)
 
-    if area_col > 0 and area_res > 0:
-        razon_j = valores_col[1] / max(valores_res[1], 1e-6)
-        razon_ff = valores_res[2] / max(valores_col[2], 1e-6)
-        st.success(
-            f"Con áreas dañadas comparables, la contaminación hunde la corriente "
-            f"**{razon_j:.0f} veces más** que los dedos rotos, y los dedos rotos hunden "
-            f"el factor de forma **{razon_ff:.0f} veces más** que la contaminación. "
-            f"Dos defectos de tamaño parecido, daños de naturaleza opuesta."
-        )
-
-    st.info(
-        "Para ver la asimetría con toda claridad, activa un defecto a la vez con la "
-        "dispersión de fabricación en cero. Con la contaminación sola verás la corriente "
-        "caer y el factor de forma casi intacto; con los dedos rotos solos, exactamente "
-        "lo contrario.",
-        icon="🔬",
-    )
+    if valores_mancha[0] > 0 and valores_grieta[0] > 0:
+        razon_j = valores_mancha[1] / max(valores_grieta[1], 1e-6)
+        razon_ff = valores_grieta[2] / max(valores_mancha[2], 1e-6)
+        if razon_j > 1.2 and razon_ff > 1.2:
+            st.success(
+                f"Con áreas dañadas parecidas, la mancha hunde la corriente "
+                f"**{_coma(razon_j, 1)} veces más** que la grieta, y la grieta hunde el factor de "
+                f"forma **{_coma(razon_ff, 1)} veces más** que la mancha. Dos fallas de tamaño "
+                f"comparable, daños de naturaleza opuesta."
+            )
 
     st.caption(
-        "Límites declarados. **No se modela el acoplamiento lateral** entre sectores "
-        "vecinos, ni ningún balance térmico: este modelo no calcula temperatura, así que "
-        "no predice puntos calientes. Sí reproduce que un sector de poca fotocorriente "
-        "**consuma** corriente cuando el conjunto opera por encima de su circuito abierto "
-        "local, que es disipación en directa y no requiere polarización inversa. El caso "
-        "de inversión por sombreado es propio de celdas en **serie**, un problema distinto "
-        "que este modelo tampoco resuelve."
+        "Límites declarados. El camino eléctrico se calcula como el recorrido de menor distancia "
+        "hasta el dedo útil más cercano, no resolviendo la red completa de resistencias: sin grieta "
+        "reproduce la resistencia de la malla del modelo analítico dentro de un 0,2 %. **No se "
+        "modela el acoplamiento lateral** entre trozos vecinos —cada celda de 3,25 mm es diez veces "
+        "la longitud de difusión, así que los portadores no cruzan—, ni ningún balance térmico: "
+        "este modelo no calcula temperatura, así que no predice puntos calientes. Sí reproduce que "
+        "un trozo de poca fotocorriente **consuma** corriente cuando el conjunto opera por encima de "
+        "su circuito abierto local, que es disipación en directa y no requiere polarización inversa."
     )

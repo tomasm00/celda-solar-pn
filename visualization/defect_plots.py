@@ -3,6 +3,7 @@
 import numpy as np
 import plotly.graph_objects as go
 
+import constants as C
 from visualization.optics_plots import ACENTO, REJILLA, SUAVE, TINTA, _base, _titulo
 
 # Escala tipo electroluminiscencia: la celda emite en el infrarrojo cercano donde
@@ -19,66 +20,126 @@ COLOR_SANA = "#8894A8"
 COLOR_DANADA = "#E5A33F"
 
 
-def mapa_fotocorriente_local(j_l, contaminacion, dedo_roto, referencia=None):
-    """
-    Mapa de fotocorriente local por sector, con escala visual tipo infrarrojo.
+def _lienzo_de_celda(fig, n, fallas, n_reporte=8):
+    """La grieta, los sectores aislados y la grilla con que se reporta."""
+    lado = C.LADO_CELDA
+    paso = lado / n
 
-    **No es una imagen de electroluminiscencia.** La electroluminiscencia se mide
-    inyectando corriente en directa y observando la recombinación radiativa, y
-    detecta perfectamente los defectos de resistencia serie: es una técnica
-    estándar para eso. Este mapa dibuja otra cosa, la fotocorriente local, que por
-    construcción no cambia cuando el defecto es resistivo.
+    if fallas is not None:
+        f, c = np.nonzero(fallas.grieta)
+        if f.size:
+            fig.add_trace(go.Scatter(
+                x=(c + 0.5) * paso, y=(f + 0.5) * paso, mode="markers",
+                marker=dict(symbol="square", size=max(3.0, 260.0 / n), color="#0B0E13",
+                            line=dict(width=0)),
+                name="grieta", hovertemplate="grieta<extra></extra>"))
+        solo_aislados = fallas.aislados & ~fallas.grieta
+        f, c = np.nonzero(solo_aislados)
+        if f.size:
+            fig.add_trace(go.Scatter(
+                x=(c + 0.5) * paso, y=(f + 0.5) * paso, mode="markers",
+                marker=dict(symbol="x-thin", size=max(3.0, 200.0 / n),
+                            line=dict(color="#E4664A", width=1.1)),
+                name="sin camino a la barra",
+                hovertemplate="sector aislado<extra></extra>"))
 
-    Se conserva porque muestra bien el daño de colección, pero llamarlo
-    electroluminiscencia era incorrecto y llevaba a una conclusión falsa sobre lo
-    que un instrumento real vería (ver D-25).
+    for k in range(1, n_reporte):
+        fig.add_shape(type="line", x0=k * lado / n_reporte, x1=k * lado / n_reporte,
+                      y0=0, y1=lado, line=dict(color=REJILLA, width=0.8))
+        fig.add_shape(type="line", x0=0, x1=lado, y0=k * lado / n_reporte,
+                      y1=k * lado / n_reporte, line=dict(color=REJILLA, width=0.8))
+    fig.update_xaxes(title="cm", range=[0, lado], constrain="domain")
+    fig.update_yaxes(title="cm", range=[0, lado], scaleanchor="x", scaleratio=1,
+                     constrain="domain")
+    return fig
+
+
+def mapa_de_la_celda(celda, fallas, titulo=None, n_reporte=8):
     """
-    n = j_l.shape[0]
-    escala = referencia if referencia is not None else j_l
-    z = 100.0 * j_l / escala.max()
+    La corriente que entrega cada trozo de celda, sobre la malla fina.
+
+    Encima van la grieta, los sectores que se quedaron sin camino a la barra
+    colectora —que el cálculo encuentra solo— y la grilla de 8 × 8 con la que el
+    enunciado pide reportar.
+    """
+    n = celda.n
+    lado = C.LADO_CELDA
+    ejes = (np.arange(n) + 0.5) * lado / n
+    valores = 1e3 * celda.j_l
 
     fig = go.Figure(go.Heatmap(
-        z=z, colorscale=ESCALA_EL, zmin=0, zmax=100, xgap=1.5, ygap=1.5,
-        colorbar=dict(title=dict(text="emisión<br>relativa [%]", side="right"),
-                      thickness=12, len=0.85),
-        hovertemplate="sector (%{x}, %{y})<br>emisión %{z:.1f} %<extra></extra>",
-    ))
-
-    # Contorno de las zonas dañadas, para que se distingan del ruido de fabricación
-    for mascara, color, guion in ((contaminacion, "#7ED0FF", "solid"),
-                                  (dedo_roto, "#FF9E9E", "dot")):
-        for i in range(n):
-            for j in range(n):
-                if mascara[i, j]:
-                    fig.add_shape(type="rect", x0=j - 0.5, x1=j + 0.5,
-                                  y0=i - 0.5, y1=i + 0.5,
-                                  line=dict(color=color, width=1.6, dash=guion))
-
-    fig.update_xaxes(title="sector", dtick=1, showgrid=False, zeroline=False)
-    fig.update_yaxes(title="sector", dtick=1, showgrid=False, zeroline=False,
-                     scaleanchor="x", scaleratio=1)
-    fig.update_layout(title=_titulo(
-        "Fotocorriente local por sector",
-        "azul: contaminación metálica  ·  rojo punteado: dedos interrumpidos"))
-    return _base(fig, alto=440, margen_superior=62)
+        x=ejes, y=ejes, z=valores, colorscale=ESCALA_EL, zmin=0.0,
+        zmax=float(valores.max()),
+        colorbar=dict(title=dict(text="mA/cm²", side="right"), thickness=12, len=0.8),
+        hovertemplate="x %{x:.1f} cm · y %{y:.1f} cm<br>%{z:.2f} mA/cm²<extra></extra>"))
+    _lienzo_de_celda(fig, n, fallas, n_reporte)
+    fig.update_layout(
+        title=_titulo(titulo or "Corriente que genera cada trozo de celda",
+                      f"malla de {n} × {n}; la grilla fina marca los {n_reporte} × {n_reporte} "
+                      f"sectores con que se reporta"),
+        legend=dict(orientation="h", y=-0.16, x=0, font=dict(size=10.5)))
+    return _base(fig, alto=470, margen_superior=78)
 
 
-def mapa_resistencia(r_s):
-    """Resistencia serie local por sector, en escala logarítmica."""
+def mapa_resistencia(celda, fallas, n_reporte=8):
+    """
+    La resistencia serie de cada trozo, que sale de su camino hasta la barra.
+
+    La escala es logarítmica porque un sector que perdió su dedo puede tener cien
+    veces la resistencia de uno sano, y los aislados, un millón.
+    """
+    n = celda.n
+    lado = C.LADO_CELDA
+    ejes = (np.arange(n) + 0.5) * lado / n
+    finita = np.where(celda.aislados, np.nan, celda.r_s)
+    z = np.log10(np.where(np.isnan(finita), np.nan, np.maximum(finita, 1e-3)))
+
     fig = go.Figure(go.Heatmap(
-        z=np.log10(r_s), colorscale=ESCALA_RS, xgap=1.5, ygap=1.5,
-        colorbar=dict(title=dict(text="log₁₀ Rs<br>[Ω·cm²]", side="right"),
-                      thickness=12, len=0.85),
-        hovertemplate="sector (%{x}, %{y})<br>Rs = %{customdata:.3f} Ω·cm²<extra></extra>",
-        customdata=r_s,
-    ))
-    fig.update_xaxes(title="sector", dtick=1, showgrid=False, zeroline=False)
-    fig.update_yaxes(title="sector", dtick=1, showgrid=False, zeroline=False,
-                     scaleanchor="x", scaleratio=1)
-    fig.update_layout(title=_titulo(
-        "Resistencia serie local",
-        "los sectores que perdieron su dedo tienen que mandar la corriente mucho más lejos"))
-    return _base(fig, alto=440, margen_superior=62)
+        x=ejes, y=ejes, z=z, colorscale=ESCALA_RS,
+        colorbar=dict(title=dict(text="Ω·cm²", side="right"), thickness=12, len=0.8,
+                      tickmode="array",
+                      tickvals=[np.log10(v) for v in (0.5, 1, 2, 5, 10, 30, 100)],
+                      ticktext=["0,5", "1", "2", "5", "10", "30", "100"]),
+        hovertemplate="x %{x:.1f} cm · y %{y:.1f} cm<br>%{customdata:.2f} Ω·cm²<extra></extra>",
+        customdata=finita))
+    _lienzo_de_celda(fig, n, fallas, n_reporte)
+    fig.update_layout(
+        title=_titulo("Lo que le cuesta a cada trozo llegar a la barra",
+                      "resistencia serie local, en escala logarítmica"),
+        legend=dict(orientation="h", y=-0.16, x=0, font=dict(size=10.5)))
+    return _base(fig, alto=470, margen_superior=78)
+
+
+def electroluminiscencia(v_juntura, aislados, vt_n, voltaje, fallas, n_reporte=8):
+    """
+    La celda vista como la vería una cámara de electroluminiscencia.
+
+    Se polariza la celda en directa y se fotografía la luz que emite al
+    recombinarse: la emisión va con la exponencial del voltaje que ve cada juntura,
+    así que un trozo que no recibe voltaje —porque su camino tiene mucha
+    resistencia, o porque se quedó sin camino— sale oscuro. Es la técnica con la
+    que se inspeccionan paneles, y detecta justamente los defectos de resistencia
+    que el mapa de corriente no puede ver.
+    """
+    n = v_juntura.shape[0]
+    lado = C.LADO_CELDA
+    ejes = (np.arange(n) + 0.5) * lado / n
+    brillo = np.exp((v_juntura - float(np.max(v_juntura))) / vt_n)
+    brillo = np.where(aislados, 0.0, brillo)
+
+    fig = go.Figure(go.Heatmap(
+        x=ejes, y=ejes, z=brillo, colorscale=ESCALA_EL, zmin=0.0, zmax=1.0,
+        colorbar=dict(title=dict(text="brillo", side="right"), thickness=12, len=0.8,
+                      tickvals=[0, 0.5, 1], ticktext=["negro", "medio", "máximo"]),
+        customdata=v_juntura,
+        hovertemplate="x %{x:.1f} cm · y %{y:.1f} cm<br>la juntura ve %{customdata:.3f} V"
+                      "<br>brillo relativo %{z:.3f}<extra></extra>"))
+    _lienzo_de_celda(fig, n, fallas, n_reporte)
+    fig.update_layout(
+        title=_titulo(f"Electroluminiscencia simulada, con la celda a {voltaje:.3f} V".replace(".", ","),
+                      "el brillo va con la exponencial del voltaje que ve cada juntura"),
+        legend=dict(orientation="h", y=-0.16, x=0, font=dict(size=10.5)))
+    return _base(fig, alto=470, margen_superior=78)
 
 
 def comparacion_curvas(v_sana, j_sana, v_danada, j_danada, p_sana, p_danada,

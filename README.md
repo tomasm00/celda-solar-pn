@@ -47,18 +47,21 @@ es la condición que verifica el criterio V3 del enunciado.
 | `data/` | Archivos de datos medidos y sus cargadores con verificación de columnas. |
 | `physics/` | El modelo. Un módulo por eslabón de la cadena. |
 | `visualization/` | Construcción de figuras. No calcula física. |
-| `validation/` | Las 20 verificaciones, cada una devolviendo calculado, referencia, error y veredicto. |
+| `validation/` | La certificación de 21 verificaciones sobre la celda de la semilla (`checks.py`) y el monitor físico en vivo sobre los valores actuales de los controles (`monitor.py`). |
 | `ui/` | Una pestaña por módulo, más la barra lateral compartida. |
 
 ### Módulos de física
 
-- **`optics.py`** — Beer-Lambert, reflectancia, generación de pares y grilla de profundidad.
-- **`material.py`** — concentración intrínseca, difusividades, longitudes de difusión, potencial de contacto y zona de deplexión.
-- **`collection.py`** — probabilidad de que un par nacido a cada profundidad llegue vivo a la juntura.
+- **`optics.py`** — Beer-Lambert, reflectancia medida o fija, reflector trasero con rebotes sucesivos, generación de pares y grilla de profundidad.
+- **`material.py`** — concentración intrínseca, difusividades, longitudes de difusión, potencial de contacto, zona de depleción y techo intrínseco de la vida media (radiativo y Auger).
+- **`collection.py`** — probabilidad de que un par nacido a cada profundidad llegue a la juntura, muera en una superficie o se recombine en el volumen, y el reparto de los fotones incidentes entre sus diez destinos posibles.
 - **`quantum_efficiency.py`** — eficiencia cuántica externa e interna, y la grilla de sectores.
 - **`diode.py`** — corriente de saturación y la ecuación implícita del diodo, resuelta por búsqueda de raíz.
 - **`front_grid.py`** — sombreado y resistencia serie de la malla de dedos de plata.
-- **`sectors.py`** — los 64 sectores en paralelo y la propagación de defectos localizados.
+- **`balance.py`** — reparto de la potencia incidente entre lo que impone el silicio, las pérdidas ópticas, la recombinación y las pérdidas eléctricas.
+- **`compromiso.py`** — lo que cuesta la malla en puntos de eficiencia, resolviendo la curva completa para cada número de dedos y repartiendo la pérdida entre sombra, emisor y dedos.
+- **`defectos.py`** — grietas que se propagan, manchas de contaminación y el camino eléctrico de cada trozo de celda hasta la barra colectora, de donde salen la resistencia serie local y las zonas aisladas.
+- **`sectors.py`** — la malla de 48 × 48 trozos en paralelo, todos al mismo voltaje de terminal, y la curva global que resulta.
 
 ## Datos externos
 
@@ -86,25 +89,59 @@ Ninguna resuelve física del dispositivo: todo el modelo está implementado en `
 
 ## Validación
 
-Veinte verificaciones que corren solas al abrir la pestaña correspondiente. Incluyen las
-siete que exige el enunciado. El valor calculado sale siempre del modelo; solo el de
-referencia está almacenado.
+La validación tiene dos partes con trabajos distintos.
 
-Una de ellas, V2a, queda marcada como informativa y no como falla: el dato medido de Green
-da 0,415 µm de profundidad de absorción a 450 nm donde el enunciado pone «del orden de
-1 µm». Se decidió mantener el dato medido, que es el físicamente correcto, y reportar la
-discrepancia con su explicación en lugar de ajustar el dato. Descontada esa, el modelo pasa
-las veinte sin ninguna falla real.
+**Certificación.** Veintiuna verificaciones que corren siempre sobre la celda asignada por la semilla,
+sin importar lo que se haya movido en los controles. Incluyen las siete que exige el enunciado. El
+valor calculado sale siempre del modelo; solo el de referencia está almacenado. Una de ellas, V2a,
+queda marcada como informativa y no como falla: el dato medido de Green da 0,415 µm de profundidad de
+absorción a 450 nm donde el enunciado pone «del orden de 1 µm». Se decidió mantener el dato medido y
+reportar la discrepancia con su explicación. Descontada esa, la certificación pasa sin fallas.
 
-Los valores que entrega la celda de la semilla, a 45 °C y un sol:
+**Monitor en vivo.** Veintiuna vigilancias que corren en cada movimiento de un control, sobre los valores
+actuales, y avisan cuando lo que se está mostrando deja de ser físicamente posible o numéricamente
+correcto. Su resumen está siempre visible arriba de la barra lateral. Por ahora cubre las Pestañas 1 y 2,
+la coherencia de la Pestaña 1 con la 2 y con la 3, y la Pestaña 4 con su malla fina (ver D-38, D-42, D-43 y D-48).
+
+Los valores que entrega la celda de la semilla, con la variación de fabricación entre sectores
+del estado inicial (D-41), a 45 °C y un sol:
 
 | Magnitud | Valor |
 |---|---|
-| Corriente de cortocircuito | 14,5526 mA/cm² |
-| Voltaje de circuito abierto | 0,587100 V |
-| Factor de forma | 0,769274 |
-| Eficiencia | 6,5726 % |
-| Coeficiente térmico del voltaje | −2,209 mV/°C |
+| Corriente de cortocircuito | 14,5742 mA/cm² |
+| Voltaje de circuito abierto | 0,587142 V |
+| Factor de forma | 0,769291 |
+| Eficiencia | 6,5829 % |
+| Coeficiente térmico del voltaje | −2,208 mV/°C |
+
+Y el destino de los fotones que llegan a la parte iluminada de esa misma celda, que es lo que la
+Pestaña 1 reporta como reparto. Suma exactamente 100 %; las tres últimas filas son la corriente
+fotogenerada, 15,05 mA/cm², que con la sombra de la malla (3,08 %) queda en los 14,59 mA/cm² de la
+Pestaña 3:
+
+| Destino de un fotón incidente | Fracción |
+|---|---|
+| Se refleja en la superficie | 34,98 % |
+| Llega al fondo y lo absorbe el aluminio | 12,32 % |
+| Nace en el emisor y muere en la superficie frontal | 18,55 % |
+| Nace en el emisor y se recombina en su volumen | 0,53 % |
+| Nace en la base y se recombina en su volumen | 0,27 % |
+| Nace en la base y muere en la cara trasera | 0,94 % |
+| Nace en el emisor y llega a la juntura | 12,26 % |
+| Nace en la zona de depleción y se separa de inmediato | 0,37 % |
+| Nace en la base y llega a la juntura | 19,77 % |
+
+## Limitaciones declaradas
+
+Las más importantes, con su detalle en `DECISIONES.md`:
+
+- **Sin recombinación radiativa ni de Auger explícitas** (D-33). Los tiempos de vida de los controles
+  son vidas efectivas. Con el dopaje asignado al emisor, Auger limitaría su vida a 0,69 ns, pero el
+  modelo usa el valor elegido; la colección en el emisor queda sobreestimada. Incorporarla anularía la
+  respuesta en el azul del emisor de 5 µm que fija el enunciado. El monitor en vivo lo avisa.
+- **Sin acoplamiento lateral entre sectores** (D-10).
+- **Óptica plana**: incidencia normal, sin antirreflejo ni texturizado, reflector trasero especular.
+- **Estadística de Boltzmann en un emisor degenerado** (D-05).
 
 ## Correr en local
 
@@ -129,4 +166,6 @@ enunciado, decisión de diseño propia, o conocimiento externo declarado— est�
 [`DECISIONES.md`](DECISIONES.md).
 
 D-18 a D-27 documentan las correcciones hechas tras una auditoría externa independiente
-del código, y D-28 a D-30 las hechas tras la revisión del profesor.
+del código, D-28 a D-30 las hechas tras la revisión del profesor, y D-31 la reconstrucción
+de las figuras de la Pestaña 1 en torno al reparto de los fotones por destino, y D-32 a D-39
+la revisión física completa de esa pestaña y el monitor en vivo.

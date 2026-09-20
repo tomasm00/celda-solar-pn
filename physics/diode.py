@@ -92,6 +92,27 @@ def corriente_saturacion(na, nd, tr, t_k, union=None, W_cm=None):
     return C.Q * ni ** 2 * (termino_base + termino_emisor), termino_base, termino_emisor
 
 
+def corrientes_saturacion(na, nd, tr, t_k, union, W_cm, L_n, s_f):
+    """
+    Corriente de saturación de muchos sectores a la vez, en A/cm2.
+
+    Es la misma expresión de `corriente_saturacion`, evaluada sobre arreglos: lo
+    que cambia de un sector a otro es la longitud de difusión de la base —porque
+    cambia su vida media— y la recombinación de la superficie frontal. Los dos
+    factores de región finita se calculan con esos valores locales, igual que la
+    colección, porque son la misma ecuación con las mismas condiciones de borde
+    (D-20).
+    """
+    ni = float(concentracion_intrinseca(t_k))
+    ancho_base = max(W_cm - union.x_p, 1e-9)
+    ancho_emisor = max(union.x_n, 1e-9)
+    termino_base = (tr.D_n / (na * np.asarray(L_n))
+                    * factor_region_finita(ancho_base, np.asarray(L_n), tr.S_r, tr.D_n))
+    termino_emisor = (tr.D_p / (nd * tr.L_p)
+                      * factor_region_finita(ancho_emisor, tr.L_p, np.asarray(s_f), tr.D_p))
+    return C.Q * ni ** 2 * (termino_base + termino_emisor)
+
+
 def _residuo(j, v, j0, jl, rs, rp, vt_n):
     """Lo que debe anularse: la ecuación del diodo escrita como f(J) = 0."""
     v_juntura = v - rs * j

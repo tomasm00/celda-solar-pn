@@ -63,6 +63,15 @@ ESTADO_INICIAL = {
 
     # Optica
     "lambda_nm": 450.0,        # nm   color mostrado en la Pestaña 1
+    # Qué luz se lanza sobre la celda en las vistas que lo admiten: el espectro
+    # solar completo, que es la condición de medición estándar, o un solo color.
+    # Es un único control para toda la aplicación (D-35).
+    "modo_iluminacion": "espectro",   # "espectro" | "color"
+    # Reflexión frontal: el enunciado pide dos modos para la Pestaña 1, silicio
+    # desnudo medido o un valor fijo. Es una propiedad de la celda, así que la usan
+    # todas las pestañas.
+    "reflexion_modo": "medida",       # "medida" | "fija"
+    "R_fija": 0.30,                   # adimensional, valor medio del Anexo B
     "reflector_trasero": False,  # DECISION D-06: apagado por defecto, para que la
                                  # eficiencia cuantica sea la formula de un solo
                                  # paso del enunciado y las validaciones corran ahi.
@@ -85,11 +94,19 @@ ESTADO_INICIAL = {
     # todas las pestañas: la celda es una sola, y si cada pestaña tuviera el suyo
     # estarian describiendo celdas distintas (ver D-28).
     #
-    # Por defecto va en cero porque la Tabla A.1 del Anexo A define una celda
-    # homogenea: esa es la celda que el enunciado asigna y la que deben describir
-    # las cifras reportadas. La dispersion es una adicion propia declarada, y vive
-    # detras de un control explicito.
-    "dispersion_sectores": 0.0,  # desviacion logaritmica entre sectores
+    # El enunciado exige que cada sector tenga su propio tiempo de vida y su propia
+    # velocidad de recombinacion frontal, asi que el estado inicial trae variacion.
+    # Los valores de la semilla son la media geometrica de los sectores; la
+    # variacion es suave, con correlacion espacial, y cambia la corriente de la
+    # celda en +0,15 % respecto de la celda homogenea (ver D-41).
+    "dispersion_sectores": 0.25,  # desviacion logaritmica entre sectores
+    # Pestaña 4: las dos fallas localizadas, su severidad y el sorteo. Viven en el
+    # estado compartido porque la Pestaña 3 también dibuja la curva que resultan.
+    "grieta_activa": True,
+    "severidad_grieta": 0.35,
+    "contaminacion_activa": True,
+    "severidad_contaminacion": 0.35,
+    "semilla_falla": 7,
 }
 
 # ---------------------------------------------------------------------------
@@ -98,6 +115,7 @@ ESTADO_INICIAL = {
 
 RANGOS = {
     "lambda_nm": (300.0, 1200.0),
+    "R_fija": (0.0, 0.95),
     "d_n_um": (0.2, 10.0),
     "W_p_um": (20.0, 300.0),
     "S_f": (10.0, 1e6),
@@ -114,6 +132,8 @@ RANGOS = {
     "mu_n": (200.0, 1500.0),
     "mu_p": (20.0, 500.0),
     "dispersion_sectores": (0.0, 0.6),
+    "severidad_grieta": (0.0, 1.0),
+    "severidad_contaminacion": (0.0, 1.0),
 }
 
 # El enunciado fija 15-75 C para los controles de la Pestaña 3 y para la
@@ -123,3 +143,15 @@ T_RANGO_V6_C = (15.0, 75.0)
 
 # Grilla de sectores de las Pestañas 2 y 4 (enunciado: al menos 8x8)
 N_SECTORES = 8
+# Malla fina con que la Pestaña 4 resuelve las fallas: 48 × 48 celdas de 3,25 mm.
+# Con la de 8 × 8 no se puede dibujar una grieta, y con celdas mucho más chicas que
+# la longitud de difusión dejaría de valer que cada una sea un problema
+# unidimensional. Seis celdas finas por sector reportado (D-48).
+N_SECTORES_FINOS = 48
+
+
+def reflectancia_fija_de(estado):
+    """None si se usa la reflectancia medida del silicio desnudo; el valor si es fija."""
+    if estado.get("reflexion_modo", "medida") == "medida":
+        return None
+    return float(estado.get("R_fija", ESTADO_INICIAL["R_fija"]))

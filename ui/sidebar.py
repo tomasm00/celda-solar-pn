@@ -64,7 +64,9 @@ def _tabla_semilla():
 
 
 def render():
+    """Dibuja la barra y devuelve el espacio reservado para el monitor en vivo."""
     with st.sidebar:
+        espacio_monitor = st.container()
         st.subheader(f"Semilla S = {config.SEMILLA_S}")
         _tabla_semilla()
 
@@ -120,19 +122,48 @@ def render():
                 help="Bajo el contacto de aluminio. Junto con W_p y Lₙ domina la colección en el rojo.",
             )
 
-        with st.expander("Óptica", expanded=True):
+        with st.expander("Luz y óptica", expanded=True):
+            st.radio(
+                "Qué luz se lanza sobre la celda",
+                options=["espectro", "color"], key="modo_iluminacion", horizontal=True,
+                format_func=lambda m: ("Espectro solar AM1.5G" if m == "espectro"
+                                       else "Un solo color"),
+                help=("Espectro solar: la condición estándar de medición, con todos los "
+                      "colores en la proporción en que los entrega el Sol. Un solo color: "
+                      "todas las vistas que lo admiten se calculan para la longitud de "
+                      "onda elegida abajo, como en un ensayo con luz monocromática."),
+            )
             st.slider(
                 "Longitud de onda, λ [nm]",
                 *config.RANGOS["lambda_nm"], key="lambda_nm", step=5.0,
-                help="Color con el que se dibujan los perfiles de la Pestaña 1.",
+                help=("Color que se estudia en el modo de un solo color. En el modo de "
+                      "espectro solar se usa solo para marcarlo en los mapas."),
+            )
+            st.radio(
+                "Reflexión en la cara frontal",
+                options=["medida", "fija"], key="reflexion_modo", horizontal=True,
+                format_func=lambda m: ("Silicio desnudo (medida)" if m == "medida"
+                                       else "Valor fijo"),
+                help=("Silicio desnudo: la reflectancia de la interfaz aire-silicio "
+                      "calculada color por color desde las constantes ópticas medidas "
+                      "de Green (2008). Valor fijo: la misma fracción para todos los "
+                      "colores, útil para aislar el efecto de un recubrimiento."),
+            )
+            st.slider(
+                "Reflectancia fija, R",
+                *config.RANGOS["R_fija"], key="R_fija", step=0.01,
+                disabled=st.session_state.get("reflexion_modo", "medida") == "medida",
+                help="Fracción de fotones que rebota en la superficie, igual para todo color.",
             )
             st.toggle(
                 "Reflector trasero de aluminio",
                 key="reflector_trasero",
                 help=(
-                    "Apagado: la eficiencia cuántica es la fórmula de un solo paso del "
-                    "enunciado, y ahí corren las validaciones. Encendido: se suma el "
-                    "segundo paso de la luz que rebota en el fondo."
+                    "Apagado: la luz que llega al fondo la absorbe el contacto de aluminio "
+                    "y se pierde, que es la fórmula de un solo paso del enunciado y el "
+                    "caso en que corren las validaciones. Encendido: el aluminio devuelve "
+                    "el 90 % de esa luz, que vuelve a atravesar la celda, y la cara frontal "
+                    "refleja de nuevo hacia adentro una parte, en rebotes sucesivos."
                 ),
             )
 
@@ -230,3 +261,4 @@ def render():
         # ciclo, y los callbacks corren antes del redibujado.
         st.button("Restaurar valores de la semilla", on_click=_restaurar_semilla,
                   use_container_width=True)
+    return espacio_monitor
