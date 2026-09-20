@@ -32,8 +32,9 @@ def render(vigilancias=()):
         "pidió no es físicamente posible o se sale de un supuesto del curso, así que los "
         "resultados hay que leerlos con cuidado. FALLA: se rompió algo que el modelo debe "
         "cumplir para cualquier parámetro; los resultados de esa pestaña no son confiables. "
-        "Por ahora vigila la Pestaña 1 y su coherencia con la 3; las demás pestañas se "
-        "incorporan a medida que se revisan."
+        "Vigila las cuatro pestañas de simulación y la coherencia entre ellas: la óptica de "
+        "la Pestaña 1, la eficiencia cuántica y sus sectores de la 2, el solver y el balance "
+        "de potencia de la 3, y la malla fina con sus fallas de la 4."
     )
 
     st.divider()

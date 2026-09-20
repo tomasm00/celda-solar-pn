@@ -228,7 +228,9 @@ def _refinar_maximo(v, j, i_mpp, j0, jl, rs, rp, n_idealidad, t_k):
     if hi <= lo:
         return v[i_mpp], j[i_mpp], v[i_mpp] * j[i_mpp]
 
-    finos = np.linspace(lo, hi, 60)
+    # Impar, para que el maximo grueso quede dentro de la grilla fina: con un
+    # numero par el refinamiento puede devolver un valor por debajo del de partida.
+    finos = np.linspace(lo, hi, 61)
     j_finos = np.array([-resolver_corriente(vv, j0, jl, rs, rp, n_idealidad, t_k)
                         for vv in finos])
     p_finos = finos * j_finos

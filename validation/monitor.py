@@ -27,9 +27,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from physics.collection import probabilidad_coleccion
-from physics.material import vida_intrinseca
+from physics.material import concentracion_intrinseca, vida_intrinseca
 from physics.optics import balance_fotones
-from units import cm_a_um
+from units import cm_a_um, voltaje_termico
 
 EN_ORDEN = "EN ORDEN"
 AVISO = "AVISO"
@@ -296,6 +296,116 @@ def vigilar_eqe(r):
     return salida
 
 
+def vigilar_curva(r):
+    """
+    Invariantes de la Pestaña 3 sobre la curva que acaba de resolver.
+
+    `r` trae la curva, la corriente de saturación, las resistencias, el factor de
+    idealidad, el ideal de la Unidad 4, la banda prohibida y el balance de
+    potencia.
+    """
+    curva, j0, rs, rp = r["curva"], r["j0"], r["rs"], r["rp"]
+    vt_n = r["n_idealidad"] * voltaje_termico(r["t_k"])
+    salida = []
+
+    # La curva resuelve de verdad la ecuación implícita, punto por punto
+    v_juntura = curva.v + rs * curva.j
+    residuo = (j0 * (np.exp(np.clip(v_juntura / vt_n, -600, 600)) - 1.0)
+               + v_juntura / rp - curva.j_l + curva.j)
+    peor = float(np.max(np.abs(residuo)))
+    relativo = peor / max(abs(curva.j_sc), 1e-30)
+    salida.append(Vigilancia(
+        "M-30", "3", "Cada punto de la curva cumple la ecuación del diodo",
+        _estado(relativo <= 1e-6, FALLA),
+        f"el peor punto se desvía {_coma(relativo, 2)} de su corriente",
+        "residuo ≤ 1 ppm de la corriente",
+        "La curva es la solución de la ecuación implícita, no la de su forma explícita."
+        if relativo <= 1e-6 else
+        "Algún punto de la curva no cumple la ecuación: el solver no está convergiendo.",
+    ))
+
+    # En circuito abierto no circula corriente, así que la resistencia serie no entra
+    sin_corriente = abs(j0 * (np.exp(np.clip(curva.v_oc / vt_n, -600, 600)) - 1.0)
+                        + curva.v_oc / rp - curva.j_l)
+    error_voc = sin_corriente / max(abs(curva.j_l), 1e-30)
+    salida.append(Vigilancia(
+        "M-31", "3", "La resistencia serie no toca el voltaje de circuito abierto",
+        _estado(error_voc <= 1e-6, FALLA),
+        f"la ecuación en {_coma(curva.v_oc, 4)} V cierra con {_coma(error_voc, 2)} de error",
+        "residuo ≤ 1 ppm",
+        "El voltaje de circuito abierto sale de anular la corriente, y ahí la resistencia "
+        "serie no puede consumir nada." if error_voc <= 1e-6 else
+        "El voltaje de circuito abierto no anula la corriente del modelo.",
+    ))
+
+    # Guarda física: el voltaje extraíble no puede superar la banda prohibida
+    eg = float(r["eg_v"])
+    salida.append(Vigilancia(
+        "M-32", "3", "Voltaje de circuito abierto frente a la banda prohibida",
+        _estado(curva.v_oc <= eg, FALLA),
+        f"{_coma(curva.v_oc, 4)} V de un techo de {_coma(eg, 4)} V "
+        f"({_coma(100 * curva.v_oc / eg, 4)} % del techo)", "V_oc ≤ E_g/q",
+        "El voltaje extraíble está por debajo de la banda prohibida, como debe ser."
+        if curva.v_oc <= eg else
+        "El voltaje supera la banda prohibida: ocurre al subir el factor de idealidad, "
+        "que el modelo trata como independiente de la corriente de saturación y no lo es.",
+    ))
+
+    # El factor de forma no puede superar el ideal sin resistencias de la Unidad 4
+    ff0 = float(r["ff0"])
+    salida.append(Vigilancia(
+        "M-33", "3", "Factor de forma frente al ideal de la Unidad 4",
+        _estado(curva.ff <= ff0 * 1.01, AVISO),
+        f"{_coma(curva.ff, 4)} frente a {_coma(ff0, 4)}", "FF ≤ FF₀ + 1 %",
+        "El factor de forma queda bajo el ideal sin resistencias parásitas, que es su techo."
+        if curva.ff <= ff0 * 1.01 else
+        "El factor de forma supera el ideal: revisar el solver o el factor de idealidad.",
+    ))
+
+    # El punto de máxima potencia es realmente el máximo de la curva
+    p_grilla = float(np.max(curva.v * curva.j))
+    exceso = (curva.p_max - p_grilla) / max(curva.p_max, 1e-30)
+    salida.append(Vigilancia(
+        "M-34", "3", "El punto de máxima potencia es el máximo de la curva",
+        _estado(-1e-9 <= exceso <= 1e-3, FALLA),
+        f"{_coma(1e3 * curva.p_max, 4)} mW/cm² contra {_coma(1e3 * p_grilla, 4)} en la grilla",
+        "el refinamiento mejora la grilla en ≤ 0,1 %",
+        "La potencia máxima sale de afinar entre los dos vecinos del máximo, y mejora lo "
+        "que da la grilla sin inventarlo." if -1e-9 <= exceso <= 1e-3 else
+        "El punto de máxima potencia no corresponde al máximo de la curva.",
+    ))
+
+    # Baja inyección: el exceso de portadores frente al dopaje de la base
+    ni = float(concentracion_intrinseca(r["t_k"]))
+    delta_n = ni ** 2 / r["NA"] * np.exp(np.clip(curva.v_oc / voltaje_termico(r["t_k"]), 0, 600))
+    razon = float(delta_n / r["NA"])
+    salida.append(Vigilancia(
+        "M-35", "3", "Baja inyección en circuito abierto",
+        _estado(razon <= 0.1, AVISO),
+        f"exceso de electrones {_fmt_concentracion(delta_n)}, "
+        f"{_coma(100 * razon, 2)} % del dopaje de la base", "exceso ≤ 10 % del dopaje",
+        "Los portadores generados son muchos menos que el dopaje: las expresiones de baja "
+        "inyección que usa el modelo son válidas." if razon <= 0.1 else
+        "El exceso de portadores se acerca al dopaje de la base: fuera de baja inyección, "
+        "las expresiones del modelo dejan de valer.",
+    ))
+
+    # El balance de potencia cierra contra lo que entra
+    if "balance" in r:
+        balance = r["balance"]
+        cierre = abs(float(balance.cierre))
+        salida.append(Vigilancia(
+            "M-36", "3", "El balance de potencia cierra",
+            _estado(cierre <= 0.05, FALLA),
+            f"{_coma(cierre, 2)} mW/cm² de {_coma(balance.incidente, 1)} que entran",
+            "diferencia ≤ 0,05 mW/cm²",
+            "Todas las etapas del balance suman la potencia que trae el sol."
+            if cierre <= 0.05 else
+            "El balance de potencia no cierra: hay energía que aparece o desaparece.",
+        ))
+    return salida
+
+
 def vigilar_fallas(r):
     """
     Invariantes de la Pestaña 4 sobre la malla fina y el camino eléctrico.
@@ -387,6 +497,8 @@ def evaluar(bus):
         resultados += vigilar_absorcion(bus["absorcion"])
     if "eqe" in bus:
         resultados += vigilar_eqe(bus["eqe"])
+    if "curva_iv" in bus and "curva" in bus["curva_iv"]:
+        resultados += vigilar_curva(bus["curva_iv"])
     if "defectos" in bus:
         resultados += vigilar_fallas(bus["defectos"])
     resultados += vigilar_coherencia(bus)

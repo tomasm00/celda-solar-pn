@@ -1091,3 +1091,32 @@ dan la misma celda sin fallas).
 solución de la red completa de resistencias. No hay acoplamiento lateral entre celdas vecinas ni balance
 térmico: el modelo no calcula temperatura, así que no predice puntos calientes.
 
+---
+
+## D-49 · Siete vigilancias para la Pestaña 3 — [VALIDACIÓN]
+
+**Qué faltaba.** El monitor vigilaba las Pestañas 1, 2 y 4, pero de la Pestaña 3 solo miraba la coherencia
+de su corriente con las otras. Lo que la pestaña calcula por dentro —el solver implícito, el punto de
+máxima potencia, el régimen de validez— no tenía ninguna vigilancia. El aviso de voltaje mayor que la banda
+prohibida era un mensaje suelto dentro de la pestaña, invisible desde la de Validación.
+
+| Código | Vigilancia | Qué comprueba | Nivel |
+|---|---|---|---|
+| M-30 | Cada punto de la curva cumple la ecuación del diodo | Evalúa el residuo en los 420 puntos con la corriente publicada: si el solver hubiera resuelto la forma explícita, el residuo sería del orden de la caída sobre la resistencia serie | FALLA |
+| M-31 | La resistencia serie no toca el voltaje de circuito abierto | En circuito abierto no circula corriente, así que la ecuación en ese punto no contiene la resistencia serie: se comprueba que se anula sin ella | FALLA |
+| M-32 | Voltaje de circuito abierto frente a la banda prohibida | Reemplaza el mensaje suelto. Salta con factor de idealidad 2, donde el modelo da 1,172 V contra un techo de 1,119 | FALLA |
+| M-33 | Factor de forma frente al ideal de la Unidad 4 | El ideal sin resistencias parásitas es su techo | AVISO |
+| M-34 | El punto de máxima potencia es el máximo de la curva | El refinamiento entre los dos vecinos del máximo grueso tiene que mejorarlo, nunca empeorarlo | FALLA |
+| M-35 | Baja inyección en circuito abierto | El exceso de portadores frente al dopaje de la base. Salta junto con M-32, porque es la misma causa | AVISO |
+| M-36 | El balance de potencia cierra | Todas las etapas suman la potencia incidente, dentro de 0,05 mW/cm² | FALLA |
+
+**Un error que encontró M-34.** El refinamiento del punto de máxima potencia buscaba entre los dos vecinos
+del máximo con una grilla de 60 puntos —número par—, que no contiene al máximo grueso. A 15 °C eso devolvía
+una potencia una fracción por debajo de la de partida. Con 61 puntos el máximo grueso queda dentro y el
+refinamiento solo puede mejorar.
+
+**Probado en diez regímenes**: la semilla, factor de idealidad 2, 1,5 soles, 15 y 75 °C, resistencia serie
+de 5 Ω·cm², resistencia paralela de 10, vida media de 1000 µs con superficie pasivada, emisor de 0,2 µm con
+reflector y reflectancia fija en cero. Solo saltan M-32 y M-35, y saltan donde deben: con el factor de
+idealidad en 2, que es el régimen que el modelo no puede describir. El monitor queda en 28 vigilancias.
+

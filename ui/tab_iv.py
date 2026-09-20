@@ -219,6 +219,9 @@ def render():
 
     balance = _balance(campo, reparto, curva, huella_electrica, grid.fraccion_sombra, eg_v,
                        s.irradiancia_soles)
+    st.session_state["_bus"]["curva_iv"].update(
+        curva=curva, j0=j0, rs=rs_total, rp=s.R_p, n_idealidad=s.n_idealidad, t_k=t_k,
+        ff0=ff0, eg_v=eg_v, NA=s.NA, balance=balance, irradiancia=s.irradiancia_soles)
     st.plotly_chart(energia_plots.cascada_de_potencia(balance), use_container_width=True)
 
     r_tratada = 0.05

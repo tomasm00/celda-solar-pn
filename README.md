@@ -98,10 +98,10 @@ queda marcada como informativa y no como falla: el dato medido de Green da 0,415
 absorción a 450 nm donde el enunciado pone «del orden de 1 µm». Se decidió mantener el dato medido y
 reportar la discrepancia con su explicación. Descontada esa, la certificación pasa sin fallas.
 
-**Monitor en vivo.** Veintiuna vigilancias que corren en cada movimiento de un control, sobre los valores
+**Monitor en vivo.** Veintiocho vigilancias que corren en cada movimiento de un control, sobre los valores
 actuales, y avisan cuando lo que se está mostrando deja de ser físicamente posible o numéricamente
 correcto. Su resumen está siempre visible arriba de la barra lateral. Por ahora cubre las Pestañas 1 y 2,
-la coherencia de la Pestaña 1 con la 2 y con la 3, y la Pestaña 4 con su malla fina (ver D-38, D-42, D-43 y D-48).
+las cuatro pestañas de simulación y la coherencia entre ellas (ver D-38, D-42, D-43, D-48 y D-49).
 
 Los valores que entrega la celda de la semilla, con la variación de fabricación entre sectores
 del estado inicial (D-41), a 45 °C y un sol:
